@@ -39,6 +39,44 @@ def test_cache_key_includes_threshold_only_when_provided():
     assert same_threshold != diff_threshold
 
 
+def test_cache_key_distinguishes_translation_llm_models():
+    """Switching the translation LLM (claude-opus → gpt-4o → qwen2.5:72b) must
+    invalidate the cache so we don't serve a stale Claude translation as if it
+    were the new model's output."""
+    a = cache.cache_key("fp", "fr", "small", "llm", ["en"], "audio",
+                        translation_llm_model="claude-opus-4-7")
+    b = cache.cache_key("fp", "fr", "small", "llm", ["en"], "audio",
+                        translation_llm_model="gpt-4o")
+    c = cache.cache_key("fp", "fr", "small", "llm", ["en"], "audio",
+                        translation_llm_model="qwen2.5:72b")
+    assert len({a, b, c}) == 3
+
+
+def test_cache_key_distinguishes_vision_llm_models_in_scene_mode():
+    """In scene/cinematic, the bible depends on which LLM described the
+    keyframes — a different vision model produces different descriptions and
+    therefore a different translation."""
+    a = cache.cache_key("fp", "fr", "small", "llm", ["en"], "scene",
+                        scene_threshold=0.4,
+                        translation_llm_model="claude-opus-4-7",
+                        vision_llm_model="claude-opus-4-7")
+    b = cache.cache_key("fp", "fr", "small", "llm", ["en"], "scene",
+                        scene_threshold=0.4,
+                        translation_llm_model="claude-opus-4-7",
+                        vision_llm_model="qwen2.5-vl:72b")
+    assert a != b
+
+
+def test_cache_key_omits_llm_args_when_none():
+    """Callers pass None for non-llm providers — those should produce the same
+    key as omitting the kwarg entirely, so DeepL/NLLB jobs don't accidentally
+    fragment the cache."""
+    a = cache.cache_key("fp", "fr", "small", "deepl", ["en"], "audio")
+    b = cache.cache_key("fp", "fr", "small", "deepl", ["en"], "audio",
+                        translation_llm_model=None, vision_llm_model=None)
+    assert a == b
+
+
 def test_cache_load_missing_returns_none(tmp_path, monkeypatch):
     from app.config import settings as _settings
     monkeypatch.setattr(_settings._env, "cache_dir", tmp_path)

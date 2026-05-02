@@ -21,11 +21,22 @@ def cache_key(
     provider: str,
     source_priority: list[str],
     mode: str,
+    *,
     scene_threshold: float | None = None,
+    translation_llm_model: str | None = None,
+    vision_llm_model: str | None = None,
 ) -> str:
-    """`scene_threshold` is included only for scene/cinematic modes — when set,
-    a different threshold produces a different bible and therefore a different
-    final VTT. Audio mode passes None so its keys stay stable."""
+    """Build a stable cache key. Each kwarg is included only when relevant —
+    callers pass None for kwargs that don't affect the output for their request:
+
+    - `scene_threshold`: relevant for scene/cinematic modes. Different threshold
+      → different scene bible → different final VTT.
+    - `translation_llm_model`: relevant when provider="llm". Different LLM model
+      → different translation output. Switching from claude-opus-4-7 to
+      gpt-4o or qwen2.5:72b must invalidate the cache.
+    - `vision_llm_model`: relevant for scene/cinematic modes (the bible content
+      depends on which LLM described the keyframes).
+    """
     parts = [
         media_fingerprint,
         target_lang,
@@ -36,6 +47,10 @@ def cache_key(
     ]
     if scene_threshold is not None:
         parts.append(f"thr={scene_threshold:.3f}")
+    if translation_llm_model:
+        parts.append(f"tllm={translation_llm_model}")
+    if vision_llm_model:
+        parts.append(f"vllm={vision_llm_model}")
     raw = "|".join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 

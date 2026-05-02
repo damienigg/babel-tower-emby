@@ -125,9 +125,19 @@ def process(req: ProcessRequest) -> ProcessResult:
         raise MediaNotFound(f"media not found: {req.media_path}")
 
     fp = cache_mod.file_fingerprint(media)
-    # For scene/cinematic, the result depends on the detection threshold too,
-    # so include it in the cache key. Audio mode passes None (omitted).
+    # The cache key is built from every input that affects output:
+    # - For scene/cinematic, the detection threshold + the vision LLM model
+    #   (the bible depends on it).
+    # - For provider=llm, the translation LLM model (output depends on it
+    #   directly). DeepL/NLLB don't have a model setting that varies, so we
+    #   pass None and they fall through to a single key per provider.
     threshold = settings.scene_detection_threshold if req.mode in MULTIMODAL_MODES else None
+    tllm_model = (
+        settings.translation_llm_model if req.translation_provider == "llm" else None
+    )
+    vllm_model = (
+        settings.vision_llm_model if req.mode in MULTIMODAL_MODES else None
+    )
     key = cache_mod.cache_key(
         fp,
         req.target_lang,
@@ -136,6 +146,8 @@ def process(req: ProcessRequest) -> ProcessResult:
         req.source_lang_priority,
         req.mode,
         scene_threshold=threshold,
+        translation_llm_model=tllm_model,
+        vision_llm_model=vllm_model,
     )
     cached = cache_mod.load(key)
     if cached:
