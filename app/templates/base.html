@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Babel Tower{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%97%BC%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root {
+      --bt-ok-bg: #1f4f1f; --bt-ok-fg: #cfe9cf;
+      --bt-warn-bg: #5a4a14; --bt-warn-fg: #fbe49b;
+      --bt-err-bg: #5a1f1f; --bt-err-fg: #f5b3b3;
+      --bt-info-bg: #2a3a55; --bt-info-fg: #b6cae8;
+      --bt-active-bg: #2f4f7f; --bt-active-fg: #cfe2ff;
+      --bt-muted-bg: #2a2a2a; --bt-muted-fg: #888;
+    }
+    body { padding: 1rem 2rem; max-width: 1100px; margin: 0 auto; }
+    h1 { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; }
+    h1::before { content: "🗼"; font-size: 0.9em; }
+    nav ul { display: flex; gap: 0.5rem; padding: 0; list-style: none; margin-top: 0.5rem; }
+    nav a { padding: 0.4rem 0.9rem; border-radius: 0.4rem; text-decoration: none; transition: background 0.15s; }
+    nav a:hover { background: var(--pico-card-background-color); }
+    nav a.active { background: var(--pico-primary); color: var(--pico-primary-inverse); }
+
+    /* Status pills — consistent palette */
+    .status-pill {
+      display: inline-block; padding: 0.15rem 0.55rem; border-radius: 0.4rem;
+      font-size: 0.82em; font-weight: 500; letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+    .status-pill.ok, .status-pill.succeeded { background: var(--bt-ok-bg); color: var(--bt-ok-fg); }
+    .status-pill.warn { background: var(--bt-warn-bg); color: var(--bt-warn-fg); }
+    .status-pill.err, .status-pill.failed { background: var(--bt-err-bg); color: var(--bt-err-fg); }
+    .status-pill.queued { background: var(--bt-info-bg); color: var(--bt-info-fg); }
+    .status-pill.running { background: var(--bt-active-bg); color: var(--bt-active-fg); }
+    .status-pill.muted { background: var(--bt-muted-bg); color: var(--bt-muted-fg); }
+
+    /* Cards on dashboard */
+    .stat-card { padding: 0.85rem 1rem; }
+    .stat-card header { padding-bottom: 0.4rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--pico-card-border-color); font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em; color: var(--pico-muted-color); }
+    .stat-card .pill-row { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+    .stat-card p { margin: 0.3rem 0 0; font-size: 0.95em; }
+    .stat-card code { font-size: 0.85em; }
+    .stat-card a { font-size: 0.85em; }
+
+    /* Settings form */
+    .field-help { font-size: 0.82em; color: var(--pico-muted-color); margin-top: 0.25rem; line-height: 1.4; }
+    .grid-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem 2rem; }
+    @media (max-width: 700px) { .grid-fields { grid-template-columns: 1fr; } }
+    .grid-fields > div { margin-bottom: 0.5rem; }
+    .grid-fields label { font-weight: 500; }
+
+    /* Settings sections — left accent + slight background to group them */
+    section.settings-section {
+      border-left: 3px solid var(--pico-primary);
+      padding: 0.5rem 0 0.5rem 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    section.settings-section > header h3 {
+      margin: 0 0 0.5rem; font-size: 1.1em; color: var(--pico-primary);
+    }
+
+    /* Hidden state for conditional fields */
+    .field-hidden { display: none; }
+
+    /* Toast/banner that auto-fades */
+    .save-banner { transition: opacity 0.4s ease-out; }
+    .save-banner.fade-out { opacity: 0; }
+
+    code.path { font-size: 0.82em; word-break: break-all; color: var(--pico-muted-color); }
+
+    /* Library table */
+    table button.subtitle-btn { padding: 0.25rem 0.7rem; font-size: 0.85em; }
+    table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+
+    /* HTMX request indicator */
+    .htmx-indicator { opacity: 0; transition: opacity 0.2s; }
+    .htmx-request .htmx-indicator { opacity: 1; }
+  </style>
+</head>
+<body>
+  <header>
+    <hgroup>
+      <h1>Babel Tower</h1>
+      <p>Auto-translated subtitles for your Emby library.</p>
+    </hgroup>
+    <nav>
+      <ul>
+        <li><a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+        <li><a href="/library" class="{% if active == 'library' %}active{% endif %}">Library</a></li>
+        <li><a href="/settings" class="{% if active == 'settings' %}active{% endif %}">Settings</a></li>
+      </ul>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    // ── Shared HTMX result renderers (sweep button + per-item Subtitle buttons) ──
+    function showJobResult(elemId, xhr, success) {
+      const out = document.getElementById(elemId);
+      if (!out) return;
+      if (success) {
+        try {
+          const r = JSON.parse(xhr.responseText);
+          out.innerHTML = '<span class="status-pill queued">queued · ' + r.id + '</span>';
+        } catch (_) {
+          out.innerHTML = '<span class="status-pill ok">queued</span>';
+        }
+      } else {
+        const detail = (xhr.responseText || '').slice(0, 120);
+        out.innerHTML = '<span class="status-pill err">HTTP ' + xhr.status + ' · ' + detail + '</span>';
+      }
+    }
+    function showSweepResult(elemId, xhr, success) {
+      const out = document.getElementById(elemId);
+      if (!out) return;
+      if (success) {
+        const r = JSON.parse(xhr.responseText);
+        out.innerHTML = '<span class="status-pill ok">submitted ' + r.submitted + ' · skipped ' + r.skipped + '</span>';
+      } else {
+        out.innerHTML = '<span class="status-pill err">sweep failed · HTTP ' + xhr.status + '</span>';
+      }
+    }
+  </script>
+</body>
+</html>

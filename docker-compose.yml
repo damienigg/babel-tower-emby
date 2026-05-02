@@ -1,0 +1,71 @@
+services:
+  babel-tower:
+    container_name: babel-tower
+    restart: unless-stopped
+
+    # ── Image source ────────────────────────────────────────────────────────────
+    # Pick ONE of the two blocks below.
+    #
+    # (A) Build locally — works from a shell on TrueNAS, your laptop, or any
+    #     docker host. Best for development. TrueNAS Apps "Custom App" UI may
+    #     not run `build:` — in that case use (B).
+    build:
+      context: .
+      dockerfile: Dockerfile.openvino   # use `Dockerfile` for the CPU-only image
+    #
+    # (B) Pull from GHCR — paste-ready for TrueNAS Apps Custom App. Comment out
+    #     the `build:` block above and uncomment the line below. Set GHCR_OWNER
+    #     in your shell or .env to your GitHub username/org.
+    # image: ghcr.io/${GHCR_OWNER}/babel-tower-emby:${IMAGE_FLAVOR:-openvino}
+    # ────────────────────────────────────────────────────────────────────────────
+
+    ports:
+      - "8765:8765"
+
+    # Runtime user. The image defaults to `app` (UID/GID 568) which matches
+    # TrueNAS Scale's `apps` user, so on TrueNAS this Just Works. Override via
+    # PUID/PGID env vars if your host uses a different UID, e.g.
+    # `PUID=1000 PGID=1000 docker compose up`. Set both to 0 for root.
+    user: "${PUID:-568}:${PGID:-568}"
+
+    # Intel iGPU passthrough — required for OpenVINO GPU inference.
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      # The `render` group GID on the host. Run `getent group render` on the
+      # host to find yours. TrueNAS Scale 24.10+ typically uses 107; vanilla
+      # Ubuntu uses 109. Override per-host via the RENDER_GID env var.
+      - "${RENDER_GID:-107}"
+
+    environment:
+      BABEL_DEEPL_API_KEY: ${DEEPL_API_KEY:-}
+      BABEL_EMBY_URL: ${EMBY_URL:-}
+      BABEL_EMBY_API_KEY: ${EMBY_API_KEY:-}
+      BABEL_WHISPER_BACKEND: ${BABEL_WHISPER_BACKEND:-openvino}
+      BABEL_WHISPER_MODEL: ${BABEL_WHISPER_MODEL:-small}
+      BABEL_OPENVINO_DEVICE: ${BABEL_OPENVINO_DEVICE:-GPU}
+      BABEL_NLLB_MODEL: ${BABEL_NLLB_MODEL:-facebook/nllb-200-distilled-600M}
+      BABEL_WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      # Translation model — translates subtitle cues
+      BABEL_TRANSLATION_LLM_TYPE: ${BABEL_TRANSLATION_LLM_TYPE:-anthropic}
+      BABEL_TRANSLATION_LLM_MODEL: ${BABEL_TRANSLATION_LLM_MODEL:-claude-opus-4-7}
+      BABEL_TRANSLATION_LLM_ENDPOINT: ${BABEL_TRANSLATION_LLM_ENDPOINT:-https://api.openai.com/v1}
+      BABEL_TRANSLATION_LLM_API_KEY: ${BABEL_TRANSLATION_LLM_API_KEY:-}
+      BABEL_TRANSLATION_LLM_SUPPORTS_VISION: ${BABEL_TRANSLATION_LLM_SUPPORTS_VISION:-true}
+      # Vision model — describes scene keyframes (scene + cinematic modes)
+      BABEL_VISION_LLM_TYPE: ${BABEL_VISION_LLM_TYPE:-anthropic}
+      BABEL_VISION_LLM_MODEL: ${BABEL_VISION_LLM_MODEL:-claude-opus-4-7}
+      BABEL_VISION_LLM_ENDPOINT: ${BABEL_VISION_LLM_ENDPOINT:-https://api.openai.com/v1}
+      BABEL_VISION_LLM_API_KEY: ${BABEL_VISION_LLM_API_KEY:-}
+      BABEL_VISION_LLM_ENABLED: ${BABEL_VISION_LLM_ENABLED:-true}
+
+    volumes:
+      # Cache: OpenVINO IR (slow first-run, fast after), HF model downloads,
+      # per-file transcript cache, and settings.json mutated by the web UI.
+      # Persist across restarts.
+      - ./cache:/cache
+      # Media library — READ-WRITE so the app can write .vtt files next to
+      # source media. The container user (UID 568 / `app` by default, matching
+      # TrueNAS Scale's apps user) must have write access. Edit the host path
+      # to match your dataset (e.g. /mnt/tank/media:/mnt/media:rw).
+      - /mnt/media:/mnt/media:rw

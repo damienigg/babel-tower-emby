@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Babel Tower — Settings{% endblock %}
+
+{% block content %}
+<section>
+  <h2>Settings</h2>
+  <p>
+    Settings persist to <code>/cache/settings.json</code> and override env defaults from
+    <code>docker-compose.yml</code>. Sensitive fields show as <em>[set]</em> on read; leave them
+    blank to keep the existing value.
+  </p>
+
+  {% if saved %}
+    <article class="save-banner" id="save-banner" style="background: var(--bt-ok-bg); color: var(--bt-ok-fg); border-color: var(--bt-ok-bg);">
+      ✓ Settings saved.
+    </article>
+  {% endif %}
+  {% if error %}
+    <article style="background: var(--bt-err-bg); color: var(--bt-err-fg); border-color: var(--bt-err-bg);">
+      ✗ {{ error }}
+    </article>
+  {% endif %}
+
+  <form method="post" action="/settings">
+    {% for section, fields in sections %}
+    <section class="settings-section">
+      <header><h3>{{ section }}</h3></header>
+      <div class="grid-fields">
+        {% for f in fields %}
+          {% set k = f.key %}
+          {% set v = values.get(k) %}
+          {% set is_sensitive = k in sensitive %}
+          {% set is_readonly = k in read_only %}
+          <div id="field-{{ k }}">
+            <label for="{{ k }}">{{ f.label }}</label>
+            {% if f.type == 'select' %}
+              <select id="{{ k }}" name="{{ k }}" {% if is_readonly %}disabled{% endif %}>
+                {% for opt in f.options %}
+                  <option value="{{ opt }}" {% if v == opt %}selected{% endif %}>{{ opt }}</option>
+                {% endfor %}
+              </select>
+            {% elif f.type == 'checkbox' %}
+              <label>
+                <input type="checkbox" id="{{ k }}" name="{{ k }}" {% if v %}checked{% endif %} {% if is_readonly %}disabled{% endif %}>
+                <small>(currently: <strong>{{ 'on' if v else 'off' }}</strong>)</small>
+              </label>
+            {% elif f.type == 'number' %}
+              <input type="number" step="any" id="{{ k }}" name="{{ k }}" value="{{ v if v is not none else '' }}" {% if is_readonly %}readonly{% endif %}>
+            {% elif f.type == 'password' %}
+              <input type="password" id="{{ k }}" name="{{ k }}" autocomplete="new-password" placeholder="{% if v == '[set]' %}[currently set — leave blank to keep]{% else %}not set{% endif %}">
+            {% else %}
+              {% if v is iterable and v is not string %}
+                {% set v_text = v|join(',') %}
+              {% else %}
+                {% set v_text = v if v is not none else '' %}
+              {% endif %}
+              <input type="text" id="{{ k }}" name="{{ k }}" value="{{ v_text }}" {% if is_readonly %}readonly{% endif %}>
+            {% endif %}
+            {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+
+    <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+      <button type="submit">Save settings</button>
+      <button type="button" class="secondary"
+              onclick="if(confirm('Reset ALL settings to env defaults?')){fetch('/api/settings',{method:'DELETE'}).then(()=>location.reload())}">
+        Reset all to env defaults
+      </button>
+    </div>
+  </form>
+</section>
+
+<script>
+  // ── Conditional fields: hide endpoint + adapt api-key placeholder per slot ──
+  function syncSlot(prefix) {
+    const typeSel = document.getElementById(prefix + '_llm_type');
+    if (!typeSel) return;
+    const isCompat = typeSel.value === 'openai_compat';
+
+    const endpointField = document.getElementById('field-' + prefix + '_llm_endpoint');
+    if (endpointField) endpointField.style.display = isCompat ? '' : 'none';
+
+    const keyInput = document.getElementById(prefix + '_llm_api_key');
+    if (keyInput && keyInput.placeholder !== '[currently set — leave blank to keep]') {
+      keyInput.placeholder = isCompat
+        ? 'leave blank for local Ollama / LM Studio / LocalAI'
+        : 'sk-ant-...';
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    ['translation', 'vision'].forEach(slot => {
+      syncSlot(slot);
+      const sel = document.getElementById(slot + '_llm_type');
+      if (sel) sel.addEventListener('change', () => syncSlot(slot));
+    });
+
+    // Auto-fade the "saved" banner after a moment
+    const banner = document.getElementById('save-banner');
+    if (banner) {
+      setTimeout(() => {
+        banner.classList.add('fade-out');
+        setTimeout(() => banner.remove(), 500);
+      }, 2500);
+    }
+  });
+</script>
+{% endblock %}

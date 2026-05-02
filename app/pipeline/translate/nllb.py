@@ -1,0 +1,110 @@
+"""NLLB-200 (Meta's No Language Left Behind) translation provider.
+
+Runs locally via optimum-intel + OpenVINO, so it accelerates on the Intel iGPU.
+Only available in the openvino-flavored image — CPU-only users see a clear
+error at provider construction time directing them to llm or deepl.
+"""
+from functools import lru_cache
+
+from app.config import settings
+from app.pipeline.stt import Cue
+from app.pipeline.translate.base import TranslationError
+
+
+# ISO 639-1 -> FLORES-200 code (the 30 most common languages NLLB-200 supports).
+# The full list (200 langs) is in NLLB-200's docs; extend this map as needed.
+_FLORES = {
+    "en": "eng_Latn", "fr": "fra_Latn", "es": "spa_Latn", "de": "deu_Latn",
+    "it": "ita_Latn", "pt": "por_Latn", "ru": "rus_Cyrl", "ja": "jpn_Jpan",
+    "ko": "kor_Hang", "zh": "zho_Hans", "ar": "arb_Arab", "hi": "hin_Deva",
+    "tr": "tur_Latn", "vi": "vie_Latn", "th": "tha_Thai", "pl": "pol_Latn",
+    "nl": "nld_Latn", "sv": "swe_Latn", "no": "nob_Latn", "da": "dan_Latn",
+    "fi": "fin_Latn", "cs": "ces_Latn", "el": "ell_Grek", "he": "heb_Hebr",
+    "hu": "hun_Latn", "ro": "ron_Latn", "uk": "ukr_Cyrl", "id": "ind_Latn",
+    "ms": "zsm_Latn", "tl": "tgl_Latn", "ca": "cat_Latn", "bn": "ben_Beng",
+}
+
+_BATCH = 16
+_MAX_LEN = 256
+
+
+@lru_cache(maxsize=2)
+def _model_and_tokenizer(model_id: str, device: str, cache_root: str):
+    """Cache keyed by config so settings changes reload the model."""
+    try:
+        from optimum.intel import OVModelForSeq2SeqLM
+    except ImportError as e:
+        raise TranslationError(
+            "NLLB requires the openvino image flavor (optimum-intel). "
+            "Use the Dockerfile.openvino build, or pick the 'llm' or 'deepl' provider."
+        ) from e
+    from pathlib import Path
+    from transformers import AutoTokenizer
+
+    cache_dir = Path(cache_root) / "nllb-models"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=str(cache_dir))
+    model = OVModelForSeq2SeqLM.from_pretrained(
+        model_id,
+        export=True,
+        device=device,
+        cache_dir=str(cache_dir),
+    )
+    return model, tokenizer
+
+
+def _load() -> tuple:
+    return _model_and_tokenizer(settings.nllb_model, settings.openvino_device, str(settings.cache_dir))
+
+
+def _to_flores(code: str) -> str:
+    if code not in _FLORES:
+        raise TranslationError(
+            f"NLLB language map does not include {code!r}. Extend _FLORES in nllb.py "
+            f"with its FLORES-200 code (e.g. 'fra_Latn'). NLLB-200 supports 200 languages."
+        )
+    return _FLORES[code]
+
+
+class NLLBProvider:
+    def __init__(self) -> None:
+        # Trigger the heavy import upfront so config errors fail at provider
+        # construction rather than mid-translation.
+        _load()
+
+    def translate(self, cues: list[Cue], source_lang: str, target_lang: str, context=None) -> list[Cue]:
+        # NLLB is text-only — `context` is silently ignored. The processor enforces
+        # that scene/cinematic modes use Claude.
+        try:
+            model, tokenizer = _load()
+
+            src = _to_flores(source_lang)
+            tgt = _to_flores(target_lang)
+            tokenizer.src_lang = src
+            tgt_token_id = tokenizer.convert_tokens_to_ids(tgt)
+
+            out: list[Cue] = []
+            for i in range(0, len(cues), _BATCH):
+                batch = cues[i:i + _BATCH]
+                inputs = tokenizer(
+                    [c.text for c in batch],
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=_MAX_LEN,
+                )
+                generated = model.generate(
+                    **inputs,
+                    forced_bos_token_id=tgt_token_id,
+                    max_length=_MAX_LEN,
+                    num_beams=2,
+                )
+                decoded = tokenizer.batch_decode(generated, skip_special_tokens=True)
+                for c, t in zip(batch, decoded):
+                    out.append(Cue(id=c.id, start=c.start, end=c.end, text=t))
+            return out
+        except TranslationError:
+            raise
+        except Exception as e:
+            raise TranslationError(f"NLLB inference failed: {type(e).__name__}: {e}") from e

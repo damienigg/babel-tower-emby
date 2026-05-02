@@ -1,0 +1,75 @@
+"""OpenVINO STT backend via optimum-intel.
+
+Uses Hugging Face Whisper exported to OpenVINO IR. The first call for a given
+model triggers download + IR conversion (slow, 5-30 min depending on size);
+subsequent calls hit the cached IR and run on the configured device.
+"""
+from functools import lru_cache
+from pathlib import Path
+
+import soundfile as sf
+
+from app.config import settings
+from app.pipeline.stt import Cue, TranscriptionResult
+
+
+_HF_PREFIX = "openai/whisper-"
+
+
+@lru_cache(maxsize=2)
+def _pipeline(model_name: str, device: str, cache_root: str):
+    """Cache keyed by config so settings changes reload the pipeline.
+    Heavy imports stay inside so the CPU backend doesn't pay them at import time."""
+    from optimum.intel import OVModelForSpeechSeq2Seq
+    from transformers import AutoProcessor, pipeline as hf_pipeline
+
+    model_id = _HF_PREFIX + model_name
+    cache_dir = Path(cache_root) / "openvino-models"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    processor = AutoProcessor.from_pretrained(model_id, cache_dir=str(cache_dir))
+    model = OVModelForSpeechSeq2Seq.from_pretrained(
+        model_id,
+        export=True,
+        device=device,
+        cache_dir=str(cache_dir),
+    )
+
+    return hf_pipeline(
+        "automatic-speech-recognition",
+        model=model,
+        tokenizer=processor.tokenizer,
+        feature_extractor=processor.feature_extractor,
+        chunk_length_s=30,
+        return_timestamps=True,
+    )
+
+
+def transcribe(audio_path: Path, language_hint: str | None = None) -> TranscriptionResult:
+    audio, sr = sf.read(str(audio_path))
+    if sr != 16000:
+        raise RuntimeError(f"expected 16 kHz audio, got {sr} Hz")
+
+    pipe = _pipeline(settings.whisper_model, settings.openvino_device, str(settings.cache_dir))
+    generate_kwargs: dict = {"task": "transcribe"}
+    if language_hint:
+        generate_kwargs["language"] = language_hint
+
+    result = pipe(audio, return_timestamps=True, generate_kwargs=generate_kwargs)
+
+    cues: list[Cue] = []
+    for i, chunk in enumerate(result.get("chunks", [])):
+        ts = chunk.get("timestamp") or (None, None)
+        if ts[0] is None or ts[1] is None:
+            continue
+        text = (chunk.get("text") or "").strip()
+        if not text:
+            continue
+        cues.append(Cue(id=i, start=float(ts[0]), end=float(ts[1]), text=text))
+
+    # The HF pipeline doesn't surface the language detected by Whisper. Trust the
+    # caller's hint (which we derive from ffprobe track tags upstream); when no
+    # hint is given, fall back to "en" with the understanding that this is a
+    # known limitation of the OpenVINO backend at the moment.
+    detected = language_hint or "en"
+    return TranscriptionResult(detected_language=detected, cues=cues)

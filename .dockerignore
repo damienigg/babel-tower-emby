@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.venv
+*.egg-info
+.git
+.github
+README.md
+.env
+.env.example
+docker-compose.yml
+cache/
+.claude

@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Babel Tower — Library{% endblock %}
+
+{% block content %}
+<section>
+  <h2>Library</h2>
+
+  {% if not configured %}
+    <article style="background: #5a4a14; color: #fbe49b; border-color: #5a4a14;">
+      Emby is not configured. Set <strong>Emby server URL</strong> and <strong>Emby API key</strong>
+      on the <a href="/settings">Settings</a> page to browse the library.
+    </article>
+  {% elif error %}
+    <article style="background: #5a1f1f; color: #f5b3b3; border-color: #5a1f1f;">
+      Failed to fetch from Emby: {{ error }}
+    </article>
+  {% else %}
+
+  <form method="get" action="/library" style="margin-bottom: 1rem;">
+    <div class="grid">
+      <label>
+        Search by name
+        <input type="text" name="q" value="{{ q }}" placeholder="e.g. Casablanca">
+      </label>
+      <label>
+        Target language
+        <input type="text" name="target_lang" value="{{ target_lang }}" placeholder="fr">
+      </label>
+      <label>
+        Mode
+        <select name="mode">
+          {% for m in modes %}
+            <option value="{{ m }}" {% if mode == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <label>
+      <input type="checkbox" name="missing_only" value="1" {% if missing_only %}checked{% endif %}>
+      <small>Only show items missing a <strong>{{ target_lang }}</strong> subtitle</small>
+    </label>
+    <input type="hidden" name="limit" value="{{ limit }}">
+    <button type="submit">Apply filters</button>
+  </form>
+
+  <p>
+    <small>
+      Page {{ (start_index // limit) + 1 }} of {{ ((total - 1) // limit) + 1 if total else 1 }}
+      &middot; showing {{ items|length }} of {{ total }} item(s)
+      &middot; clicking <em>Subtitle this</em> queues a job using the target language and mode above.
+      {% if mode in ('scene', 'cinematic') %}
+        <br><strong>Note:</strong> {{ mode }} mode requires <code>translation_provider=llm</code>
+        with a vision-capable LLM backend. Adjust in <a href="/settings">Settings</a> if it isn't already.
+      {% endif %}
+    </small>
+  </p>
+
+  {% if not items %}
+    <p><em>No items match.</em></p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>{{ target_lang }} sub?</th>
+          <th>Path</th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td>{{ item.name }}</td>
+          <td>{{ item.type }}</td>
+          <td>
+            {% if item.has_target_subtitle %}
+              <span class="status-pill ok">yes</span>
+            {% else %}
+              <span class="status-pill warn">missing</span>
+            {% endif %}
+          </td>
+          <td><code class="path">{{ item.path }}</code></td>
+          <td>
+            <button class="secondary subtitle-btn"
+                    hx-post="/api/process/{{ item.id }}?target_lang={{ target_lang }}&mode={{ mode }}"
+                    hx-swap="none"
+                    hx-on::after-request="showJobResult('row-result-{{ item.id }}', event.detail.xhr, event.detail.successful)">
+              Subtitle this
+            </button>
+          </td>
+          <td><span id="row-result-{{ item.id }}"></span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% set base_qs = "?q=" ~ q ~ "&target_lang=" ~ target_lang ~ "&mode=" ~ mode ~ "&missing_only=" ~ ('1' if missing_only else '0') ~ "&limit=" ~ limit %}
+    <div style="margin-top: 1rem; display: flex; gap: 1rem; align-items: center;">
+      {% if start_index > 0 %}
+        <a href="{{ base_qs }}&start_index={{ start_index - limit if start_index >= limit else 0 }}">← Previous</a>
+      {% else %}
+        <span style="color: var(--pico-muted-color);">← Previous</span>
+      {% endif %}
+      <span style="color: var(--pico-muted-color);">
+        items {{ start_index + 1 }}–{{ start_index + items|length }} / {{ total }}
+      </span>
+      {% if start_index + items|length < total %}
+        <a href="{{ base_qs }}&start_index={{ start_index + limit }}">Next →</a>
+      {% else %}
+        <span style="color: var(--pico-muted-color);">Next →</span>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% endif %}
+</section>
+{% endblock %}

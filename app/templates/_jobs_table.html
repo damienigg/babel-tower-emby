@@ -1,0 +1,40 @@
+{# Renders the Recent jobs section. Loaded as a partial via HTMX every 3s, also #}
+{# rendered inline on the dashboard's first paint so there's no flash of empty. #}
+<section id="jobs-section"
+         hx-get="/partials/jobs"
+         hx-trigger="every 3s"
+         hx-swap="outerHTML">
+  <h2>Recent jobs</h2>
+  {% if not jobs %}
+    <p><em>No jobs yet. Trigger one from the API, the Sweep button above, or via Emby webhook.</em></p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Item</th>
+          <th>Lang</th>
+          <th>Mode</th>
+          <th>Provider</th>
+          <th>Cues</th>
+          <th>Output</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for j in jobs %}
+        <tr>
+          <td><span class="status-pill {{ j.status }}">{{ j.status }}</span></td>
+          <td>{{ j.item_name or j.item_id }}</td>
+          <td>{{ j.target_lang }}</td>
+          <td>{{ j.mode }}</td>
+          <td>{{ j.provider }}</td>
+          <td>{{ j.cue_count or '-' }}</td>
+          <td><code class="path">{{ j.output_path or '-' }}</code></td>
+          <td>{{ j.error or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>

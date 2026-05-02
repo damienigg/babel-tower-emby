@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Babel Tower — Dashboard{% endblock %}
+
+{% block content %}
+<section>
+  <h2>Status</h2>
+  <div class="grid">
+
+    <article class="stat-card">
+      <header>Emby</header>
+      {% if emby_configured %}
+        <div class="pill-row"><span class="status-pill ok">configured</span></div>
+        <p><code class="path">{{ settings.emby_url }}</code></p>
+      {% else %}
+        <div class="pill-row"><span class="status-pill warn">not configured</span></div>
+        <p><a href="/settings">Set the Emby URL + API key →</a></p>
+      {% endif %}
+    </article>
+
+    <article class="stat-card">
+      <header>Speech-to-Text</header>
+      <div class="pill-row">
+        <span class="status-pill ok">{{ settings.whisper_backend }}</span>
+        <span class="status-pill muted">{{ settings.whisper_model }}</span>
+      </div>
+      <p>
+        {% if settings.whisper_backend == 'openvino' %}device: {{ settings.openvino_device }}
+        {% else %}{{ settings.whisper_compute_type }}{% endif %}
+      </p>
+    </article>
+
+    <article class="stat-card">
+      <header>Translation LLM</header>
+      <div class="pill-row">
+        <span class="status-pill ok">{{ settings.translation_llm_type }}</span>
+        {% if settings.translation_llm_supports_vision %}
+          <span class="status-pill muted">vision</span>
+        {% endif %}
+      </div>
+      <p><code>{{ settings.translation_llm_model }}</code></p>
+    </article>
+
+    <article class="stat-card">
+      <header>Vision LLM</header>
+      {% if settings.vision_llm_enabled %}
+        <div class="pill-row">
+          <span class="status-pill ok">{{ settings.vision_llm_type }}</span>
+        </div>
+        <p><code>{{ settings.vision_llm_model }}</code></p>
+      {% else %}
+        <div class="pill-row"><span class="status-pill warn">disabled</span></div>
+        <p><small>scene/cinematic modes unavailable</small></p>
+      {% endif %}
+    </article>
+
+    <article class="stat-card">
+      <header>Job defaults</header>
+      <div class="pill-row">
+        <span class="status-pill ok">{{ settings.default_translation_provider }}</span>
+        <span class="status-pill ok">{{ settings.default_mode }}</span>
+      </div>
+      <p>Target: <strong>{{ settings.default_target_lang }}</strong></p>
+    </article>
+
+  </div>
+</section>
+
+<section>
+  <h2>Library actions</h2>
+  <p>
+    Sweep queues a job for every Emby item missing a subtitle in your default
+    target language (<strong>{{ settings.default_target_lang }}</strong>). Already-subtitled items are skipped. Jobs run one at a time
+    so the iGPU doesn't thrash.
+  </p>
+  <button hx-post="/api/sweep?target_lang={{ settings.default_target_lang }}"
+          hx-confirm="Queue a job for every library item missing a {{ settings.default_target_lang }} subtitle?"
+          hx-swap="none"
+          hx-on::after-request="showSweepResult('sweep-result', event.detail.xhr, event.detail.successful)">
+    Sweep library
+  </button>
+  <span id="sweep-result"></span>
+</section>
+
+{% include "_jobs_table.html" %}
+
+<section>
+  <h2>How to trigger a job</h2>
+  <p>Three ways to start a job (besides the per-item button on the <a href="/library">Library</a> page):</p>
+  <ol>
+    <li><strong>From an Emby item id</strong> (defaults from Settings; override per call as query params):
+      <pre>curl -X POST 'http://&lt;host&gt;:8765/api/process/&lt;EMBY_ITEM_ID&gt;?target_lang=fr&amp;mode=scene'</pre>
+    </li>
+    <li><strong>From a media path</strong> (no Emby needed):
+      <pre>curl -X POST http://&lt;host&gt;:8765/transcribe-translate \
+  -H 'Content-Type: application/json' \
+  -d '{"media_path": "/mnt/media/movie.mkv", "target_lang": "fr"}'</pre>
+    </li>
+    <li><strong>Auto-trigger on new items</strong>: in Emby admin → Server Settings → Notifications → Add Notification → Webhook,
+      set the URL to <code>http://&lt;host&gt;:8765/webhook/emby</code>. If you set a <code>webhook_secret</code> in Settings,
+      add the matching <code>X-Babel-Token</code> header in Emby's webhook config.</li>
+  </ol>
+</section>
+{% endblock %}
