@@ -55,10 +55,11 @@ class _EnvSettings(BaseSettings):
     default_target_lang: str = "fr"
     default_source_lang_priority: list[str] = ["en", "ja", "*"]
     # Default provider is `nllb`: free, fully local, no account, no API key.
-    # On the openvino image it downloads the ~1.5 GB Meta NLLB-200 model on
-    # first call and runs offline thereafter. On the CPU image NLLB fails fast
-    # with an actionable error directing the user to switch to deepl or llm.
-    # Users who want best quality flip this to `llm` in the Settings UI.
+    # Works on BOTH image flavors out of the box — the openvino image runs it
+    # accelerated on the Intel iGPU via optimum-intel; the CPU image falls
+    # back to plain PyTorch transformers (slower but no setup either way).
+    # Either way the first call downloads the ~1.5 GB NLLB-200 model to
+    # /cache/nllb-models. Users who want best quality flip this to `llm`.
     default_translation_provider: str = "nllb"
     default_skip_if_target_audio_exists: bool = True
     # Quality tier: audio (default) | scene | cinematic.

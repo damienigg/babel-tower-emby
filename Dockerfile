@@ -12,6 +12,12 @@ RUN groupadd --gid 568 app && useradd --create-home --uid 568 --gid 568 --shell 
 
 WORKDIR /app
 
+# CPU-only torch (~200 MB). Required by the NLLB fallback path so the
+# zero-setup default provider (nllb) works on the CPU image too — not just
+# on the openvino-flavored one. Pulled from the CPU-only PyPI mirror to skip
+# the CUDA wheels.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 RUN pip install --no-cache-dir \
     'fastapi>=0.115' \
     'uvicorn[standard]>=0.32' \
@@ -22,7 +28,9 @@ RUN pip install --no-cache-dir \
     'openai>=1.55' \
     'httpx>=0.27' \
     'jinja2>=3.1' \
-    'python-multipart>=0.0.9'
+    'python-multipart>=0.0.9' \
+    'transformers>=4.45' \
+    'sentencepiece>=0.2'
 
 COPY --chown=app:app app/ ./app/
 

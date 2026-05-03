@@ -60,7 +60,7 @@ Three providers, picked from Settings → Defaults → *Who translates the cues?
 | -------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------- | -------------------------- | ------------------------ |
 | `llm`    | Best — uses whichever LLM you configured. Idioms, nuance, cross-cue context, vision-aware in scene/cinematic modes. | Pay-per-token (cloud) or free (local LLM).          | Whatever you point it at   | Everything the LLM knows |
 | `deepl`  | Excellent for EU langs, best in class on those pairs. Text-only, no cross-cue context.          | Free tier: 500k chars/month (~6 movies). Paid above. | Cloud (DeepL API)          | ~30 (EU + EA majors)     |
-| `nllb`   | Fair-to-good. Covers the long tail of languages.                                                | Free, offline.                                      | Local — Intel iGPU via OpenVINO | 200 (FLORES-200 set) |
+| `nllb`   | Fair-to-good. Covers the long tail of languages.                                                | Free, offline.                                      | Local — Intel iGPU via OpenVINO when available, plain CPU torch otherwise | 200 (FLORES-200 set) |
 
 ### LLM models — split by function
 
@@ -167,7 +167,7 @@ Set per-slot endpoint (only used for `openai_compat`) and API key. The two slots
 
 `deepl` auto-detects free vs paid by the API key suffix (`:fx` = free).
 
-`nllb` is only available in the OpenVINO image (it shares the optimum-intel + transformers deps with the OpenVINO Whisper backend). First call triggers HF model download + OpenVINO IR conversion (~5 min, ~1.5 GB cached).
+`nllb` works on **both image flavors** out of the box. The openvino image runs it accelerated on the Intel iGPU via `optimum-intel` (5-10× faster); the CPU image falls back to plain PyTorch transformers. First call triggers an HF model download (~1.5 GB) cached to `/cache/nllb-models`. On openvino there's an additional one-off OpenVINO IR conversion (~5 min) that's also cached.
 
 ## STT backends
 
@@ -372,7 +372,7 @@ Everything below is **optional**. The web UI covers the same surface and is the 
 | `BABEL_MAX_LINES_PER_CUE`      | `2`                  | Max display lines per cue (overflow merges into the last line, never drops content) |
 | `BABEL_DEFAULT_TARGET_LANG`    | `fr`                 | Default target language for UI / webhook / sweep jobs                   |
 | `BABEL_DEFAULT_SOURCE_LANG_PRIORITY` | `["en","ja","*"]` | Source-language preference for track selection (JSON list)             |
-| `BABEL_DEFAULT_TRANSLATION_PROVIDER` | `nllb`       | Default provider for UI / webhook / sweep jobs (`nllb`/`deepl`/`llm`). Default `nllb` is free + local — fails fast on the CPU image with an actionable error. |
+| `BABEL_DEFAULT_TRANSLATION_PROVIDER` | `nllb`       | Default provider for UI / webhook / sweep jobs (`nllb`/`deepl`/`llm`). Default `nllb` is free, local, no key — works on both image flavors out of the box. |
 | `BABEL_DEFAULT_MODE`           | `audio`              | Default quality tier — `audio` / `scene` / `cinematic`                  |
 | `BABEL_SCENE_DETECTION_THRESHOLD` | `0.4`             | ffmpeg scene-detection threshold (0–1, lower = more scenes)              |
 | `BABEL_SCENE_MIN_LENGTH_SECONDS` | `1.5`              | Skip scenes shorter than this many seconds                               |
@@ -471,5 +471,5 @@ babel-tower-emby/
             ├── base.py             Provider protocol + TranslationContext
             ├── llm.py              LLM-backed translator (uses the configured backend)
             ├── deepl.py            DeepL (httpx, text-only — context ignored)
-            └── nllb.py             NLLB-200 via OpenVINO (text-only — context ignored)
+            └── nllb.py             NLLB-200 — OpenVINO-accelerated when available, CPU torch fallback otherwise
 ```

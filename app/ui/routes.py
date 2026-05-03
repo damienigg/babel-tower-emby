@@ -147,7 +147,7 @@ _FIELD_META: list[dict[str, Any]] = [
      "label": "Translation provider — pick your cost tier", "type": "select",
      "options": [
          {"value": "nllb",
-          "label": "nllb · [FREE · LOCAL] Meta NLLB-200 · 200 langs · openvino image only · ~1.5 GB downloaded on first call"},
+          "label": "nllb · [FREE · LOCAL] Meta NLLB-200 · 200 langs · works on both image flavors · ~1.5 GB downloaded on first call"},
          {"value": "deepl",
           "label": "deepl · [FREE TIER 500k chars/mo · CLOUD beyond] best on EU/Asian pairs · ~30 langs · text-only"},
          {"value": "llm",
@@ -156,8 +156,8 @@ _FIELD_META: list[dict[str, Any]] = [
      "help": (
          "Sorted from cheapest to most flexible:\n"
          "• NLLB — fully free, local, no account, no key. Decent quality on ~30 well-supported "
-         "language pairs. Only works in the openvino-flavored image (the CPU image fails fast "
-         "with an actionable error).\n"
+         "language pairs. Works on both image flavors (uses Intel iGPU via OpenVINO when "
+         "available, falls back to CPU torch otherwise — slower but no setup either way).\n"
          "• DeepL — free 500k characters/month (~6 movies), then paid. Excellent quality on "
          "European and East-Asian pairs. Requires a DeepL API key in the API keys section.\n"
          "• LLM — uses whatever you configure in the Translation model section. Highest "

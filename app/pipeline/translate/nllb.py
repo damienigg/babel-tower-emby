@@ -1,8 +1,18 @@
 """NLLB-200 (Meta's No Language Left Behind) translation provider.
 
-Runs locally via optimum-intel + OpenVINO, so it accelerates on the Intel iGPU.
-Only available in the openvino-flavored image — CPU-only users see a clear
-error at provider construction time directing them to llm or deepl.
+Runs fully locally — no API keys, no accounts, no cloud calls. Two backends,
+auto-selected at load time:
+
+- `optimum-intel` (preferred, openvino image): exports the model to OpenVINO
+  IR and runs the encoder/decoder on the Intel iGPU. 5-10× faster than the
+  CPU fallback for typical N305-class hardware.
+- `transformers` (CPU image fallback): plain PyTorch on the CPU. Slower
+  (a 1000-cue film takes ~5-10 min on a modern CPU) but means the default
+  `nllb` provider works on the CPU image too without requiring the user to
+  switch to deepl/llm.
+
+Either backend exposes the same `model.generate(...)` API, so the inference
+loop below doesn't need to know which one it got.
 """
 from functools import lru_cache
 
@@ -30,28 +40,50 @@ _MAX_LEN = 256
 
 @lru_cache(maxsize=2)
 def _model_and_tokenizer(model_id: str, device: str, cache_root: str):
-    """Cache keyed by config so settings changes reload the model."""
+    """Cache keyed by config so settings changes reload the model. Tries the
+    OpenVINO-accelerated backend first; falls back to plain PyTorch transformers
+    on the CPU image. Both backends are available out of the box — the default
+    `nllb` provider works on either image flavor."""
+    from pathlib import Path
+
     try:
-        from optimum.intel import OVModelForSeq2SeqLM
+        from transformers import AutoTokenizer
     except ImportError as e:
         raise TranslationError(
-            "NLLB requires the openvino image flavor (optimum-intel). "
-            "Use the Dockerfile.openvino build, or pick the 'llm' or 'deepl' provider."
+            "NLLB requires the `transformers` package (and either `optimum-intel` for "
+            "OpenVINO acceleration or `torch` for the CPU fallback). Both Docker images "
+            "ship with these by default — install them in your environment, or pick the "
+            "'deepl' or 'llm' provider in Settings."
         ) from e
-    from pathlib import Path
-    from transformers import AutoTokenizer
 
     cache_dir = Path(cache_root) / "nllb-models"
     cache_dir.mkdir(parents=True, exist_ok=True)
-
     tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=str(cache_dir))
-    model = OVModelForSeq2SeqLM.from_pretrained(
-        model_id,
-        export=True,
-        device=device,
-        cache_dir=str(cache_dir),
-    )
-    return model, tokenizer
+
+    # Preferred: OpenVINO IR via optimum-intel (5-10× faster on Intel iGPU).
+    try:
+        from optimum.intel import OVModelForSeq2SeqLM
+        model = OVModelForSeq2SeqLM.from_pretrained(
+            model_id,
+            export=True,
+            device=device,
+            cache_dir=str(cache_dir),
+        )
+        return model, tokenizer
+    except ImportError:
+        pass   # CPU image — fall through to plain transformers below.
+
+    # Fallback: plain PyTorch transformers on the CPU. Slower but means the
+    # default `nllb` provider works on the CPU image too.
+    try:
+        from transformers import AutoModelForSeq2SeqLM
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=str(cache_dir))
+        return model, tokenizer
+    except ImportError as e:
+        raise TranslationError(
+            "NLLB needs `torch` for the CPU fallback (or `optimum-intel` for the "
+            "OpenVINO-accelerated path). Install one, or pick 'deepl' / 'llm' in Settings."
+        ) from e
 
 
 def _load() -> tuple:
