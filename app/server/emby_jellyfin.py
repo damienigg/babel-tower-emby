@@ -21,13 +21,14 @@ from app.server.base import (
 
 
 class EmbyJellyfinClient(MediaServerClient):
-    def __init__(self, base_url: str, api_key: str) -> None:
+    def __init__(self, base_url: str, api_key: str, *, verify_ssl: bool = True) -> None:
         if not base_url or not api_key:
             raise MediaServerError("Server URL and API key are required")
         self._base = base_url.rstrip("/")
         self._http = httpx.Client(
             headers={"X-Emby-Token": api_key, "Accept": "application/json"},
             timeout=30.0,
+            verify=verify_ssl,
         )
 
     def health(self) -> bool:

@@ -48,16 +48,21 @@ _STREAM_SUBTITLE = 3
 
 
 class PlexClient(MediaServerClient):
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(self, base_url: str, token: str, *, verify_ssl: bool = True) -> None:
         if not base_url or not token:
             raise MediaServerError("Plex URL and token are required")
         self._base = base_url.rstrip("/")
+        # NOTE: Plex's bundled certificate is issued for *.plex.direct only;
+        # accessing the server by LAN IP over HTTPS fails verification by
+        # default. Users on that setup should toggle "Verify SSL" off in
+        # Settings (passes verify_ssl=False here).
         self._http = httpx.Client(
             headers={
                 "X-Plex-Token": token,
                 "Accept": "application/json",
             },
             timeout=30.0,
+            verify=verify_ssl,
         )
         # Cached after first discovery — Plex section list is small and stable.
         self._video_section_keys: list[str] | None = None

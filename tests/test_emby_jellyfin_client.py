@@ -50,6 +50,16 @@ def test_client_rejects_missing_creds():
         EmbyJellyfinClient("http://x", "")
 
 
+def test_client_accepts_verify_ssl_kwarg():
+    """The verify_ssl kwarg lets users with self-signed certs (or Plex on
+    LAN IP) opt out of TLS verification. Construction succeeds in both
+    modes; the actual verification behaviour is delegated to httpx."""
+    c_default = EmbyJellyfinClient("https://emby.example.com", "k")
+    c_insecure = EmbyJellyfinClient("https://192.168.1.10:8096", "k", verify_ssl=False)
+    assert c_default is not None
+    assert c_insecure is not None
+
+
 def test_stream_from_payload_normalizes_type():
     """Emby's MediaStreams field uses capitalized type names ('Audio',
     'Subtitle'); we lowercase them on ingest so MediaItem.has_subtitle_track

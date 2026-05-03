@@ -367,6 +367,18 @@ _FIELD_META: list[dict[str, Any]] = [
              "For Plex: this is your X-Plex-Token (find it on plex.tv/account → "
              "Authorized Devices, or sign in once and grab it from any local-server URL "
              "in your browser)."},
+    {"key": "media_server_verify_ssl", "section": "Media server",
+     "label": "Verify SSL certificate (TLS)", "type": "checkbox",
+     "help": "Leave ON when your Server URL is plain http:// (the toggle is ignored) "
+             "OR when it's https:// with a publicly-trusted certificate (Let's Encrypt "
+             "behind Caddy/Nginx, etc.). Turn OFF for: Plex accessed via LAN IP (the "
+             "bundled cert is for *.plex.direct so the hostname doesn't match), "
+             "Emby/Jellyfin behind a self-signed cert, or any homelab reverse proxy "
+             "without a CA-issued cert. Disabling verification means an attacker on "
+             "your network could MITM the traffic between this container and the media "
+             "server — only do it on a trusted LAN. Advanced alternative: keep this ON "
+             "and mount a custom CA bundle into the container, then set "
+             "SSL_CERT_FILE=/path/to/ca.crt in the env — httpx picks it up automatically."},
 
     # ── API keys ──────────────────────────────────────────────────────────────
     {"key": "deepl_api_key", "section": "API keys",

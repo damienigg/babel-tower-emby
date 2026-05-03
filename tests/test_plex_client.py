@@ -106,6 +106,16 @@ def test_client_rejects_missing_creds():
         PlexClient("http://plex:32400", "")
 
 
+def test_client_accepts_verify_ssl_kwarg():
+    """Plex's bundled cert is for *.plex.direct so LAN-IP HTTPS access
+    fails verification by default. The verify_ssl kwarg lets the factory
+    propagate the user's Settings choice into httpx."""
+    c_default = PlexClient("https://plex.example.com:32400", "tok")
+    c_insecure = PlexClient("https://192.168.1.10:32400", "tok", verify_ssl=False)
+    assert c_default is not None
+    assert c_insecure is not None
+
+
 # ── HTTP behaviour (mocked transport) ─────────────────────────────────────────
 
 

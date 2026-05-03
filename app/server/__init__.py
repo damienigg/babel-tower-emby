@@ -21,6 +21,7 @@ def media_server_client() -> MediaServerClient:
     server_type = (settings.media_server_type or "").lower()
     url = settings.media_server_url
     key = settings.media_server_api_key
+    verify_ssl = bool(settings.media_server_verify_ssl)
 
     if not url or not key:
         raise MediaServerError(
@@ -29,10 +30,10 @@ def media_server_client() -> MediaServerClient:
 
     if server_type in ("emby", "jellyfin"):
         from app.server.emby_jellyfin import EmbyJellyfinClient
-        return EmbyJellyfinClient(url, key)
+        return EmbyJellyfinClient(url, key, verify_ssl=verify_ssl)
     if server_type == "plex":
         from app.server.plex import PlexClient
-        return PlexClient(url, key)
+        return PlexClient(url, key, verify_ssl=verify_ssl)
 
     raise MediaServerError(
         f"Unknown media_server_type {server_type!r} (expected one of {_SUPPORTED_TYPES})"

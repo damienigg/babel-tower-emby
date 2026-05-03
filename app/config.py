@@ -110,6 +110,15 @@ class _EnvSettings(BaseSettings):
     media_server_type: str = "emby"   # emby | jellyfin | plex
     media_server_url: str | None = None
     media_server_api_key: str | None = None
+    # Whether to verify the media server's TLS certificate. Default ON for
+    # safety. Off for: Plex via LAN IP (cert claims *.plex.direct, hostname
+    # won't match), Jellyfin/Emby with self-signed certs, or any homelab
+    # reverse-proxy without a public CA-issued cert. The toggle only affects
+    # this app's outbound calls — it does not weaken anything else. For a
+    # middle ground (self-signed but trusted CA), advanced operators can
+    # mount a CA bundle and set SSL_CERT_FILE in the container env; httpx
+    # picks that up automatically and this toggle stays ON.
+    media_server_verify_ssl: bool = True
 
 
 # Set of fields that are sensitive — masked in UI GET responses, password input on edit.
