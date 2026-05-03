@@ -30,6 +30,26 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _format_duration(seconds: float | int | None) -> str:
+    """Compact human-readable duration: '32s', '5m 32s', '1h 5m'. Used in
+    the jobs table next to the progress bar to keep the displayed progress
+    honest — if the bar says 50% but the elapsed says 12 minutes on a
+    90-second-typical job, something is wrong."""
+    if seconds is None or seconds < 0:
+        return ""
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+templates.env.filters["duration"] = _format_duration
+
+
 # ── Settings UI metadata ─────────────────────────────────────────────────────
 # Field + section metadata drive the settings form rendering. Sections are
 # ordered from "always free / no setup" (top) to "configurable cost" (middle)

@@ -3,6 +3,7 @@ to filesystem paths, runs the pipeline, writes .vtt next to media, refreshes
 the server's metadata so it picks up the new subtitle."""
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -75,6 +76,29 @@ class JobView(BaseModel):
     progress_pct: float = 0.0
     progress_stage: str = ""
     cancel_requested: bool = False
+    # Server-computed snapshot of elapsed seconds at the moment this view
+    # was serialized. The client uses this as a base and ticks +1s locally
+    # between API polls so the displayed elapsed stays smooth.
+    elapsed_seconds: float = 0.0
+    # The server's wall-clock time when this view was built, in unix
+    # seconds. Lets the client compute "how stale is this snapshot" and
+    # add the local delta — robust to small browser/server clock skew.
+    snapshot_at: float = 0.0
+
+
+def _job_view(job: jobs.Job) -> JobView:
+    """Build a JobView with the elapsed-seconds snapshot computed at this
+    instant. For finished jobs, elapsed is the final duration; for running
+    or canceling, it ticks. For queued, it's 0 (the timer starts when the
+    job actually begins running, not when it's submitted)."""
+    snapshot_at = time.time()
+    if job.started_at is None:
+        elapsed = 0.0
+    elif job.finished_at is not None:
+        elapsed = max(0.0, job.finished_at - job.started_at)
+    else:
+        elapsed = max(0.0, snapshot_at - job.started_at)
+    return JobView(**job.to_dict(), elapsed_seconds=elapsed, snapshot_at=snapshot_at)
 
 
 # ── Shared submission helper ───────────────────────────────────────────────────
@@ -276,12 +300,12 @@ def process_item(
         )
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
-    return JobView(**job.to_dict())
+    return _job_view(job)
 
 
 @router.get("/jobs", response_model=list[JobView])
 def list_jobs(limit: int = 50) -> list[JobView]:
-    return [JobView(**j.to_dict()) for j in jobs.list_jobs(limit=limit)]
+    return [_job_view(j) for j in jobs.list_jobs(limit=limit)]
 
 
 @router.get("/jobs/{job_id}", response_model=JobView)
@@ -289,7 +313,7 @@ def get_job(job_id: str) -> JobView:
     j = jobs.get_job(job_id)
     if not j:
         raise HTTPException(404, f"job {job_id!r} not found")
-    return JobView(**j.to_dict())
+    return _job_view(j)
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobView)
@@ -303,4 +327,4 @@ def cancel_job(job_id: str) -> JobView:
     if not j:
         raise HTTPException(404, f"job {job_id!r} not found")
     j.request_cancel()
-    return JobView(**j.to_dict())
+    return _job_view(j)

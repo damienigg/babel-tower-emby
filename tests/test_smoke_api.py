@@ -117,6 +117,34 @@ def test_openvino_status_endpoint_returns_shape(client):
     assert isinstance(body["models"], dict)
 
 
+def test_jobview_includes_elapsed_seconds_and_snapshot_at(client, monkeypatch):
+    """The dashboard's elapsed-time ticker reads two fields off JobView:
+    elapsed_seconds (server-computed at serialization) and snapshot_at
+    (server wall-clock at the same moment). Without both, the ticker can't
+    re-anchor on each HTMX swap and the displayed timer would drift."""
+    import time as _time
+    from app import jobs as jobs_mod
+    j = jobs_mod.Job(
+        id="testjob", item_id="i", item_name="Movie",
+        target_lang="fr", provider="nllb", mode="audio",
+    )
+    j.started_at = _time.time() - 42.0   # 42s ago
+    j.status = "running"
+    monkeypatch.setattr(jobs_mod, "_jobs", {j.id: j})
+
+    r = client.get("/api/jobs")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    view = body[0]
+    assert "elapsed_seconds" in view
+    assert "snapshot_at" in view
+    # Should report ~42s (allow a generous fudge for test runtime).
+    assert 40.0 <= view["elapsed_seconds"] <= 60.0
+    # snapshot_at is roughly "now"
+    assert abs(view["snapshot_at"] - _time.time()) < 5.0
+
+
 def test_cancel_unknown_job_returns_404(client):
     """The Cancel button on the jobs table POSTs to /api/jobs/{id}/cancel.
     Calling it with a stale id (job evicted from the in-memory cap) should

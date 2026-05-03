@@ -100,6 +100,17 @@
       color: var(--pico-muted-color);
       text-shadow: none;
     }
+    .elapsed-time {
+      font-size: 0.78em;
+      color: var(--pico-muted-color);
+      font-variant-numeric: tabular-nums;   /* monospace digits so ticking doesn't shift width */
+      margin-top: 0.15rem;
+      letter-spacing: 0.01em;
+    }
+    .elapsed-time.muted {
+      font-size: 0.78em;
+      color: var(--pico-muted-color);
+    }
     .col-progress { width: 12rem; }
     .cancel-job-btn {
       padding: 0.15rem 0.5rem !important;
@@ -362,6 +373,52 @@
         out.innerHTML = '<span class="status-pill err">HTTP ' + xhr.status + ' · ' + detail + '</span>';
       }
     }
+  </script>
+  {# Global elapsed-time ticker. Any element with data-elapsed-base (server-
+     reported elapsed seconds at snapshot time) and data-snapshot-at-ms
+     (server's wall clock at that moment, in ms) gets its text refreshed
+     once a second. The local clock delta since the snapshot is added on
+     top of the base, so the displayed timer ticks smoothly between the 3s
+     HTMX swaps without drifting away from the server's truth — each swap
+     re-anchors. Robust to small browser/server clock skew because we
+     compare the snapshot ms to the snapshot ms (same coordinate). #}
+  <script>
+    (function() {
+      function fmt(s) {
+        if (!isFinite(s) || s < 0) return '';
+        s = Math.floor(s);
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        if (h) return h + 'h ' + m + 'm';
+        if (m) return m + 'm ' + sec + 's';
+        return sec + 's';
+      }
+      // The first time we see a snapshot_at value, capture the current
+      // local Date.now() as the local reference for that snapshot. Then
+      // displayed = base + (Date.now() - localRefAtSnapshot)/1000.
+      const localAnchor = new WeakMap();
+      function tick() {
+        const now = Date.now();
+        document.querySelectorAll('.elapsed-time[data-elapsed-base]').forEach(el => {
+          const base = parseFloat(el.dataset.elapsedBase);
+          if (!isFinite(base)) return;
+          let anchor = localAnchor.get(el);
+          if (anchor === undefined) {
+            // First sighting: record the local time we saw this snapshot.
+            anchor = now;
+            localAnchor.set(el, now);
+          }
+          const localDelta = (now - anchor) / 1000;
+          // For active jobs the prefix is "after"-less; for canceled ones
+          // the template already wrote "after Xs" and the data-attrs aren't
+          // attached, so we won't tick those.
+          el.textContent = fmt(base + localDelta);
+        });
+      }
+      tick();
+      setInterval(tick, 1000);
+    })();
   </script>
 </body>
 </html>

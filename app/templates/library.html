@@ -222,6 +222,21 @@
       // and whether the cancel button should still be live.
       const ACTIVE_STATES = new Set(['queued', 'running', 'canceling']);
 
+      // Compact elapsed-time formatter. Same shape as the global ticker's
+      // formatter in base.html; duplicated here to avoid having to expose
+      // base.html's IIFE-scoped function. Used for terminal states (done /
+      // canceled) where the elapsed is fixed (no ticking required).
+      function formatElapsed(sec) {
+        if (!isFinite(sec) || sec < 1) return '';
+        sec = Math.floor(sec);
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = sec % 60;
+        if (h) return h + 'h ' + m + 'm';
+        if (m) return m + 'm ' + s + 's';
+        return s + 's';
+      }
+
       // ── State (persisted) ────────────────────────────────────────────────
       function loadBatch() {
         try {
@@ -371,16 +386,25 @@
           if (ACTIVE_STATES.has(job.status)) anyActive = true;
           if (job.status === 'running' || job.status === 'canceling') {
             const pct = Math.round(job.progress_pct || 0);
+            // Wire up the same data-* attrs the global ticker (in base.html)
+            // uses, so the elapsed line ticks once a second between the 2.5s
+            // job polls. snapshot_at is in seconds → convert to ms.
+            const snapMs = Math.round((job.snapshot_at || 0) * 1000);
+            const elapsedBase = job.elapsed_seconds || 0;
             cell.innerHTML =
               '<div class="progress-wrap" style="width:7rem" title="' +
                 (job.progress_stage || '') + '">' +
                 '<div class="progress-bar" style="width:' + pct + '%"></div>' +
                 '<span class="progress-label">' + pct + '%</span>' +
-              '</div>';
+              '</div>' +
+              '<div class="elapsed-time" data-elapsed-base="' + elapsedBase +
+                '" data-snapshot-at-ms="' + snapMs + '"></div>';
             progSum += (job.progress_pct || 0);
             progCount++;
           } else if (job.status === 'succeeded') {
-            cell.innerHTML = '<span class="status-pill ok">done</span>';
+            const elapsedTxt = formatElapsed(job.elapsed_seconds || 0);
+            cell.innerHTML = '<span class="status-pill ok">done</span>' +
+              (elapsedTxt ? ' <span class="elapsed-time muted">' + elapsedTxt + '</span>' : '');
             progSum += 100;
             progCount++;
           } else if (job.status === 'queued') {
@@ -392,7 +416,9 @@
               ((job.error || 'failed').slice(0, 40)) + '</span>';
             progCount++;
           } else if (job.status === 'canceled') {
-            cell.innerHTML = '<span class="status-pill canceled">canceled</span>';
+            const elapsedTxt = formatElapsed(job.elapsed_seconds || 0);
+            cell.innerHTML = '<span class="status-pill canceled">canceled</span>' +
+              (elapsedTxt ? ' <span class="elapsed-time muted">after ' + elapsedTxt + '</span>' : '');
             progCount++;
           } else {
             cell.innerHTML = '<span class="status-pill muted">' + job.status + '</span>';

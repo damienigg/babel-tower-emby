@@ -34,8 +34,22 @@
                 <div class="progress-bar" style="width: {{ j.progress_pct|round(1) }}%"></div>
                 <span class="progress-label">{{ j.progress_pct|round(0) }}% · {{ j.progress_stage }}</span>
               </div>
+              {# Elapsed timer ticks +1s/sec on the client between HTMX swaps;
+                 the data-* attrs let the global ticker re-anchor on each
+                 server snapshot so we don't drift. #}
+              <div class="elapsed-time"
+                   data-elapsed-base="{{ j.elapsed_seconds }}"
+                   data-snapshot-at-ms="{{ (j.snapshot_at * 1000)|round|int }}">
+                {{ j.elapsed_seconds|duration }}
+              </div>
             {% elif j.status == 'succeeded' %}
               <span class="progress-label muted">100%</span>
+              {% if j.elapsed_seconds %}
+                <div class="elapsed-time muted">{{ j.elapsed_seconds|duration }}</div>
+              {% endif %}
+            {% elif j.status == 'canceled' and j.elapsed_seconds %}
+              <span class="progress-label muted">canceled</span>
+              <div class="elapsed-time muted">after {{ j.elapsed_seconds|duration }}</div>
             {% elif j.status == 'queued' %}
               <span class="progress-label muted">queued</span>
             {% else %}
