@@ -9,12 +9,20 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/subtitle-this
-  # GHCR retention. After every successful build we prune the package so
-  # only the most recent N versions stay online — old SHA-pinned versions
-  # accumulate disk fast (the openvino image alone is several GB). Versions
-  # tagged with a release semver (e.g. 1.2.3-openvino) are protected by
-  # ignore-versions and never deleted regardless of count.
-  KEEP_LATEST_N_VERSIONS: '2'
+  # GHCR retention. Buildx publishes a multi-platform OCI image index plus
+  # one sub-manifest per platform PLUS an attestation manifest — that's
+  # 3 GHCR "versions" per build (index + amd64 + attestation). With CPU
+  # and OpenVINO flavors we get 6 versions per push. Set the keep
+  # threshold high enough to retain the most recent COMPLETE set of
+  # references; pruning too aggressively breaks the index because GHCR
+  # deletes the platform-specific sub-manifests it points at, leaving
+  # the moving `:cpu`/`:openvino` tags resolving to a broken index that
+  # docker pull rejects with "manifest unknown".
+  #
+  # 12 = 2 most-recent main-branch builds × (1 index + 1 amd64 + 1
+  # attestation) × 2 flavors. Add a safety margin if you want a
+  # rollback buffer (e.g. 24 = 4 builds).
+  KEEP_LATEST_N_VERSIONS: '12'
 
 jobs:
   build-and-push:
@@ -101,10 +109,11 @@ jobs:
         with:
           package-name: subtitle-this
           package-type: container
-          # Versions sorted newest-first; this many of the newest are kept.
-          # With both flavors (cpu + openvino) building in parallel each
-          # push, set to 2 → keep just the latest pair, prune everything
-          # else. Bump to 4 if you want a one-rollback safety buffer.
+          # See KEEP_LATEST_N_VERSIONS env var for the rationale on why
+          # this is 12 (not 2): buildx images produce 3 GHCR versions
+          # per build (index + amd64 manifest + attestation), and
+          # pruning the platform-specific manifests breaks the indices
+          # that point to them.
           min-versions-to-keep: ${{ fromJSON(env.KEEP_LATEST_N_VERSIONS) }}
           # Protect any release-tagged version (e.g. 1.2.3-cpu, 1.2-openvino)
           # from deletion — those are pinned references users may pull
