@@ -44,6 +44,21 @@ _CHUNK_SECONDS = 30
 _SAMPLE_RATE = 16000
 _CHUNK_SAMPLES = _CHUNK_SECONDS * _SAMPLE_RATE
 
+# How many 30s chunks to feed model.generate() per call. Each call has a
+# fixed startup cost (decoder init, kv-cache alloc, scheduling to iGPU);
+# batching N chunks into one call amortizes that cost and lets the iGPU
+# process the batch in parallel. Sized per-model to stay under the iGPU's
+# memory budget (whisper-large activations dominate at batch sizes > 2).
+_BATCH_BY_MODEL: dict[str, int] = {
+    "tiny": 8,
+    "base": 8,
+    "small": 4,
+    "medium": 2,
+    "large-v3-turbo": 2,
+    "large-v3": 2,
+}
+_DEFAULT_BATCH = 4
+
 
 def _noop_progress(frac: float) -> None: ...
 def _noop_cancel() -> None: ...
@@ -154,40 +169,51 @@ def transcribe(
                 "letting Whisper auto-detect", language_hint, e,
             )
 
-    for i in range(n_chunks):
+    batch_size = _BATCH_BY_MODEL.get(settings.whisper_model, _DEFAULT_BATCH)
+
+    for batch_start in range(0, n_chunks, batch_size):
         check_cancel()
-        start_sample = i * _CHUNK_SAMPLES
-        end_sample = min(len(audio), start_sample + _CHUNK_SAMPLES)
-        chunk = audio[start_sample:end_sample]
-        # Whisper's mel feature extractor expects exactly 30s of audio AND
-        # float32 dtype (soundfile returns float64 by default for WAV PCM,
-        # which the feature extractor accepts but downstream OpenVINO ops
-        # are strictly fp32). Cast eagerly + pad short final chunk with
-        # zeros (silence — Whisper emits no segments for it).
-        if chunk.dtype != np.float32:
-            chunk = chunk.astype(np.float32)
-        if len(chunk) < _CHUNK_SAMPLES:
-            chunk = np.pad(chunk, (0, _CHUNK_SAMPLES - len(chunk)))
+        batch_end = min(batch_start + batch_size, n_chunks)
 
+        # Collect this batch of chunks. Each chunk is exactly 30s of float32
+        # audio (Whisper's mel feature extractor is strict on both shape and
+        # dtype). The final chunk is zero-padded if the audio doesn't divide
+        # evenly — Whisper emits no segments for the silent tail.
+        batch_chunks: list = []
+        for i in range(batch_start, batch_end):
+            start_sample = i * _CHUNK_SAMPLES
+            end_sample = min(len(audio), start_sample + _CHUNK_SAMPLES)
+            chunk = audio[start_sample:end_sample]
+            if chunk.dtype != np.float32:
+                chunk = chunk.astype(np.float32)
+            if len(chunk) < _CHUNK_SAMPLES:
+                chunk = np.pad(chunk, (0, _CHUNK_SAMPLES - len(chunk)))
+            batch_chunks.append(chunk)
+
+        # Pass a list of 1D arrays so the feature extractor produces a
+        # batched output of shape (B, n_mels, time). Passing a 2D ndarray
+        # is ambiguous (could be interpreted as multi-channel single audio).
         features = processor.feature_extractor(
-            chunk, sampling_rate=_SAMPLE_RATE, return_tensors="pt",
+            batch_chunks, sampling_rate=_SAMPLE_RATE, return_tensors="pt",
         )
+        # token_ids shape is (B, max_seq_len). Each row decodes independently
+        # and gets its own chunk_offset for timestamp shifting.
         token_ids = model.generate(features.input_features, **generate_kwargs)
-        decoded = processor.tokenizer.decode(
-            token_ids[0], skip_special_tokens=False, decode_with_timestamps=True,
-        )
 
-        chunk_offset_s = float(i * _CHUNK_SECONDS)
-        for start, end, text in _parse_segments(decoded, chunk_offset_s):
-            cues.append(Cue(id=next_id, start=start, end=end, text=text))
-            next_id += 1
+        for k, i in enumerate(range(batch_start, batch_end)):
+            decoded = processor.tokenizer.decode(
+                token_ids[k], skip_special_tokens=False, decode_with_timestamps=True,
+            )
+            chunk_offset_s = float(i * _CHUNK_SECONDS)
+            for start, end, text in _parse_segments(decoded, chunk_offset_s):
+                cues.append(Cue(id=next_id, start=start, end=end, text=text))
+                next_id += 1
+            if detected_lang is None:
+                m = _LANG_TOKEN_RE.search(decoded)
+                if m:
+                    detected_lang = m.group(1)
 
-        if detected_lang is None:
-            m = _LANG_TOKEN_RE.search(decoded)
-            if m:
-                detected_lang = m.group(1)
-
-        progress((i + 1) / n_chunks)
+        progress(batch_end / n_chunks)
 
     return TranscriptionResult(
         detected_language=language_hint or detected_lang or "en",
