@@ -56,3 +56,48 @@ def to_iso6392(code: str | None) -> str | None:
     if code in _TWO_TO_THREE:
         return _TWO_TO_THREE[code]
     return None
+
+
+# UI dropdown source. Sorted alphabetically by English name so users find
+# their target language fast. The set covers the intersection of what our
+# three providers support well (NLLB FLORES-200 + DeepL + most LLMs).
+LANGUAGE_OPTIONS: list[tuple[str, str]] = [
+    ("ar", "Arabic"),
+    ("bn", "Bengali"),
+    ("bg", "Bulgarian"),
+    ("ca", "Catalan"),
+    ("zh", "Chinese"),
+    ("cs", "Czech"),
+    ("da", "Danish"),
+    ("nl", "Dutch"),
+    ("en", "English"),
+    ("et", "Estonian"),
+    ("fi", "Finnish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("el", "Greek"),
+    ("he", "Hebrew"),
+    ("hi", "Hindi"),
+    ("hu", "Hungarian"),
+    ("id", "Indonesian"),
+    ("it", "Italian"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("lv", "Latvian"),
+    ("lt", "Lithuanian"),
+    ("ms", "Malay"),
+    ("no", "Norwegian"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("ro", "Romanian"),
+    ("ru", "Russian"),
+    ("sk", "Slovak"),
+    ("sl", "Slovenian"),
+    ("es", "Spanish"),
+    ("sv", "Swedish"),
+    ("tl", "Tagalog"),
+    ("th", "Thai"),
+    ("tr", "Turkish"),
+    ("uk", "Ukrainian"),
+    ("vi", "Vietnamese"),
+]

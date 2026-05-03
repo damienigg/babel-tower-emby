@@ -47,37 +47,47 @@
           {% set v = values.get(k) %}
           {% set is_sensitive = k in sensitive %}
           {% set is_readonly = k in read_only %}
-          <div id="field-{{ k }}">
-            <label for="{{ k }}">{{ f.label }}</label>
-            {% if f.type == 'select' %}
-              <select id="{{ k }}" name="{{ k }}" {% if is_readonly %}disabled{% endif %}>
-                {% for opt in f.options %}
-                  {% if opt is mapping %}
-                    <option value="{{ opt.value }}" {% if v == opt.value %}selected{% endif %}>{{ opt.label }}</option>
-                  {% else %}
-                    <option value="{{ opt }}" {% if v == opt %}selected{% endif %}>{{ opt }}</option>
-                  {% endif %}
-                {% endfor %}
-              </select>
-            {% elif f.type == 'checkbox' %}
-              <label>
+          {% if f.type == 'checkbox' %}
+            {# Checkboxes get a dedicated layout: the input + state span sit
+               on one row, with the field label as a sibling above and help
+               text below. The previous nested-label structure broke
+               alignment and caused the help text to overlap visually. #}
+            <div id="field-{{ k }}" class="field-checkbox">
+              <span class="field-label">{{ f.label }}</span>
+              <label class="checkbox-row">
                 <input type="checkbox" id="{{ k }}" name="{{ k }}" {% if v %}checked{% endif %} {% if is_readonly %}disabled{% endif %}>
-                <small>(currently: <strong>{{ 'on' if v else 'off' }}</strong>)</small>
+                <span class="checkbox-state">currently <strong>{{ 'on' if v else 'off' }}</strong></span>
               </label>
-            {% elif f.type == 'number' %}
-              <input type="number" step="any" id="{{ k }}" name="{{ k }}" value="{{ v if v is not none else '' }}" {% if is_readonly %}readonly{% endif %}>
-            {% elif f.type == 'password' %}
-              <input type="password" id="{{ k }}" name="{{ k }}" autocomplete="new-password" placeholder="{% if v == '[set]' %}[currently set — leave blank to keep]{% else %}not set{% endif %}">
-            {% else %}
-              {% if v is iterable and v is not string %}
-                {% set v_text = v|join(',') %}
+              {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
+            </div>
+          {% else %}
+            <div id="field-{{ k }}">
+              <label for="{{ k }}">{{ f.label }}</label>
+              {% if f.type == 'select' %}
+                <select id="{{ k }}" name="{{ k }}" {% if is_readonly %}disabled{% endif %}>
+                  {% for opt in f.options %}
+                    {% if opt is mapping %}
+                      <option value="{{ opt.value }}" {% if v == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                    {% else %}
+                      <option value="{{ opt }}" {% if v == opt %}selected{% endif %}>{{ opt }}</option>
+                    {% endif %}
+                  {% endfor %}
+                </select>
+              {% elif f.type == 'number' %}
+                <input type="number" step="any" id="{{ k }}" name="{{ k }}" value="{{ v if v is not none else '' }}" {% if is_readonly %}readonly{% endif %}>
+              {% elif f.type == 'password' %}
+                <input type="password" id="{{ k }}" name="{{ k }}" autocomplete="new-password" placeholder="{% if v == '[set]' %}[currently set — leave blank to keep]{% else %}not set{% endif %}">
               {% else %}
-                {% set v_text = v if v is not none else '' %}
+                {% if v is iterable and v is not string %}
+                  {% set v_text = v|join(',') %}
+                {% else %}
+                  {% set v_text = v if v is not none else '' %}
+                {% endif %}
+                <input type="text" id="{{ k }}" name="{{ k }}" value="{{ v_text }}" {% if is_readonly %}readonly{% endif %}>
               {% endif %}
-              <input type="text" id="{{ k }}" name="{{ k }}" value="{{ v_text }}" {% if is_readonly %}readonly{% endif %}>
-            {% endif %}
-            {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
-          </div>
+              {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
+            </div>
+          {% endif %}
         {% endfor %}
       </div>
     </section>

@@ -12,8 +12,18 @@ from fastapi.templating import Jinja2Templates
 from app import jobs
 from app.api.manage import media_server_client
 from app.config import READ_ONLY_FIELDS, SENSITIVE_FIELDS, _EnvSettings, settings
+from app.pipeline.lang import LANGUAGE_OPTIONS
 from app.processor import SUPPORTED_MODES
 from app.server import MediaServerError
+
+
+# Reusable dropdown options for any field that takes an ISO 639-1 language
+# code. Built once from LANGUAGE_OPTIONS so the dropdown surface is the same
+# in Settings (default_target_lang) and the Library filter form.
+_LANGUAGE_DROPDOWN_OPTIONS = [
+    {"value": code, "label": f"{name} ({code})"}
+    for code, name in LANGUAGE_OPTIONS
+]
 
 
 router = APIRouter()
@@ -39,16 +49,22 @@ templates = Jinja2Templates(directory="app/templates")
 # Whisper choices have NO $ cost — only compute time × disk space.
 
 _SECTION_META: dict[str, str] = {
+    "Media server": (
+        "START HERE — without a working media server connection nothing else "
+        "is reachable. Pick your server type, paste its URL + API key (X-Plex-"
+        "Token for Plex), save. The Library tab lights up once this section "
+        "is configured."
+    ),
+    "Defaults": (
+        "Pre-set choices applied when you click 'Subtitle this' or 'Subtitle "
+        "selected' in the Library without overrides. THIS is where the "
+        "cost/complexity lever lives — Provider × Mode determines whether "
+        "each job is free, cheap, or expensive."
+    ),
     "Speech-to-Text": (
         "Whisper transcribes audio to text. ALWAYS FREE — runs 100% locally, "
         "model is downloaded once. The trade-off here is compute time × quality "
         "× disk space, NOT money."
-    ),
-    "Defaults": (
-        "Pre-set choices applied when you click 'Subtitle this' or hit "
-        "/api/process without query overrides. THIS is where the cost/complexity "
-        "lever lives — Provider × Mode determines whether each job is free, "
-        "cheap, or expensive."
     ),
     "Translation": (
         "Provider-agnostic translation knobs. Most users leave these at defaults."
@@ -57,7 +73,7 @@ _SECTION_META: dict[str, str] = {
         "Only used when Translation provider = LLM. Skip this section entirely "
         "if you stay on NLLB or DeepL. Configure cloud (Anthropic / OpenAI / "
         "OpenRouter / …) or fully local (Ollama / LM Studio / LocalAI / vLLM) "
-        "— Babel doesn't care which."
+        "— Subtitle This doesn't care which."
     ),
     "Vision model": (
         "Only used by scene and cinematic modes (the LLM that describes "
@@ -71,9 +87,6 @@ _SECTION_META: dict[str, str] = {
     "Subtitles": (
         "WebVTT line-wrap formatting."
     ),
-    "Media server": (
-        "How Subtitle This reaches your media server (Emby / Jellyfin / Plex)."
-    ),
     "API keys": (
         "Cloud provider keys. Leave everything blank for fully-local setups."
     ),
@@ -81,6 +94,52 @@ _SECTION_META: dict[str, str] = {
 
 
 _FIELD_META: list[dict[str, Any]] = [
+    # ── Media server (Emby / Jellyfin / Plex) — REQUIRED FIRST ────────────────
+    # Nothing in the rest of the app works until this section is filled in
+    # (Library page is empty, "Subtitle this" buttons fail). Put it at the
+    # top of the form so it's the first thing a fresh user sees.
+    {"key": "media_server_type", "section": "Media server",
+     "label": "Server type", "type": "select",
+     "options": [
+         {"value": "emby",
+          "label": "emby — Emby Server (the original)"},
+         {"value": "jellyfin",
+          "label": "jellyfin — Jellyfin (open-source fork of Emby; same REST API)"},
+         {"value": "plex",
+          "label": "plex — Plex Media Server (different API + auth, uses X-Plex-Token)"},
+     ],
+     "help": "Which media server you're talking to. Emby and Jellyfin share an "
+             "implementation (their REST APIs are functionally identical — Jellyfin keeps "
+             "Emby's /Items, /System/Info/Public endpoints and the X-Emby-Token auth header). "
+             "Plex has its own client (X-Plex-Token auth, /library/sections + "
+             "/library/metadata/{ratingKey} endpoints)."},
+    {"key": "media_server_url", "section": "Media server",
+     "label": "Server URL", "type": "text",
+     "help": "Where Subtitle This reaches your media server. Examples: "
+             "http://emby:8096 (docker-compose service name), "
+             "http://jellyfin:8096, "
+             "http://plex:32400 (Plex's default port), "
+             "or http://192.168.1.10:8096 (LAN IP)."},
+    {"key": "media_server_api_key", "section": "Media server",
+     "label": "API key (Plex: X-Plex-Token)", "type": "password",
+     "help": "For Emby: generate at Emby admin → Server Settings → Advanced → API Keys. "
+             "For Jellyfin: same path — Dashboard → API Keys. "
+             "For Plex: this is your X-Plex-Token (find it on plex.tv/account → "
+             "Authorized Devices, or sign in once and grab it from any local-server URL "
+             "in your browser)."},
+    {"key": "media_server_verify_ssl", "section": "Media server",
+     "label": "Verify SSL certificate (TLS)", "type": "checkbox",
+     "help": "Leave ON when your Server URL is plain http:// (the toggle is ignored) "
+             "OR when it's https:// with a publicly-trusted certificate (Let's Encrypt "
+             "behind Caddy/Nginx, etc.). Turn OFF for: Plex accessed via LAN IP (the "
+             "bundled cert is for *.plex.direct so the hostname doesn't match), "
+             "Emby/Jellyfin behind a self-signed cert, or any homelab reverse proxy "
+             "without a CA-issued cert. Disabling verification means an attacker on "
+             "your network could MITM the traffic between this container and the media "
+             "server — only do it on a trusted LAN. Advanced alternative: keep this ON "
+             "and mount a custom CA bundle into the container, then set "
+             "SSL_CERT_FILE=/path/to/ca.crt in the env — httpx picks it up automatically."},
+
     # ── Speech-to-Text ────────────────────────────────────────────────────────
     {"key": "whisper_backend", "section": "Speech-to-Text",
      "label": "Backend", "type": "select",
@@ -136,8 +195,11 @@ _FIELD_META: list[dict[str, Any]] = [
 
     # ── Defaults — the cost lever ─────────────────────────────────────────────
     {"key": "default_target_lang", "section": "Defaults",
-     "label": "Default target language", "type": "text",
-     "help": "ISO 639-1 code: en, fr, ja, es, de, ja, ja, zh, ar, …"},
+     "label": "Default target language", "type": "select",
+     "options": _LANGUAGE_DROPDOWN_OPTIONS,
+     "help": "Language you want subtitles in. Used when you don't override per-job. "
+             "Coverage varies by translation provider — NLLB and DeepL support ~30 "
+             "languages well; LLM providers handle whatever the underlying model knows."},
     {"key": "default_source_lang_priority", "section": "Defaults",
      "label": "Source language priority", "type": "text",
      "help": "Comma-separated. '*' is a wildcard that matches any language. "
@@ -337,49 +399,6 @@ _FIELD_META: list[dict[str, Any]] = [
      "label": "Max lines per cue", "type": "number",
      "help": "Overflow merges into the last line — never drops content."},
 
-    # ── Media server (Emby / Jellyfin / Plex) ─────────────────────────────────
-    {"key": "media_server_type", "section": "Media server",
-     "label": "Server type", "type": "select",
-     "options": [
-         {"value": "emby",
-          "label": "emby — Emby Server (the original)"},
-         {"value": "jellyfin",
-          "label": "jellyfin — Jellyfin (open-source fork of Emby; same REST API)"},
-         {"value": "plex",
-          "label": "plex — Plex Media Server (different API + auth, uses X-Plex-Token)"},
-     ],
-     "help": "Which media server you're talking to. Emby and Jellyfin share an "
-             "implementation (their REST APIs are functionally identical — Jellyfin keeps "
-             "Emby's /Items, /System/Info/Public endpoints and the X-Emby-Token auth header). "
-             "Plex has its own client (X-Plex-Token auth, /library/sections + "
-             "/library/metadata/{ratingKey} endpoints)."},
-    {"key": "media_server_url", "section": "Media server",
-     "label": "Server URL", "type": "text",
-     "help": "Where Babel reaches your media server. Examples: "
-             "http://emby:8096 (docker-compose service name), "
-             "http://jellyfin:8096, "
-             "http://plex:32400 (Plex's default port), "
-             "or http://192.168.1.10:8096 (LAN IP)."},
-    {"key": "media_server_api_key", "section": "Media server",
-     "label": "API key (Plex: X-Plex-Token)", "type": "password",
-     "help": "For Emby: generate at Emby admin → Server Settings → Advanced → API Keys. "
-             "For Jellyfin: same path — Dashboard → API Keys. "
-             "For Plex: this is your X-Plex-Token (find it on plex.tv/account → "
-             "Authorized Devices, or sign in once and grab it from any local-server URL "
-             "in your browser)."},
-    {"key": "media_server_verify_ssl", "section": "Media server",
-     "label": "Verify SSL certificate (TLS)", "type": "checkbox",
-     "help": "Leave ON when your Server URL is plain http:// (the toggle is ignored) "
-             "OR when it's https:// with a publicly-trusted certificate (Let's Encrypt "
-             "behind Caddy/Nginx, etc.). Turn OFF for: Plex accessed via LAN IP (the "
-             "bundled cert is for *.plex.direct so the hostname doesn't match), "
-             "Emby/Jellyfin behind a self-signed cert, or any homelab reverse proxy "
-             "without a CA-issued cert. Disabling verification means an attacker on "
-             "your network could MITM the traffic between this container and the media "
-             "server — only do it on a trusted LAN. Advanced alternative: keep this ON "
-             "and mount a custom CA bundle into the container, then set "
-             "SSL_CERT_FILE=/path/to/ca.crt in the env — httpx picks it up automatically."},
-
     # ── API keys ──────────────────────────────────────────────────────────────
     {"key": "deepl_api_key", "section": "API keys",
      "label": "DeepL API key", "type": "password",
@@ -462,6 +481,7 @@ def library(
                 "missing_only": bool(missing_only),
                 "start_index": 0, "limit": limit,
                 "modes": list(SUPPORTED_MODES),
+                "language_options": LANGUAGE_OPTIONS,
                 "error": None,
             },
         )
@@ -500,6 +520,7 @@ def library(
             "start_index": start_index,
             "limit": limit,
             "modes": list(SUPPORTED_MODES),
+            "language_options": LANGUAGE_OPTIONS,
             "error": error,
         },
     )

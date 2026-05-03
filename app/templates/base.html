@@ -52,6 +52,21 @@
     .grid-fields > div { margin-bottom: 0.5rem; }
     .grid-fields label { font-weight: 500; }
 
+    /* Settings checkboxes — input + state span on one row, label as a
+       sibling above (not wrapping). Prevents the supporting text from
+       overlapping the checkbox or the help paragraph below. */
+    .field-checkbox .field-label { display: block; font-weight: 500; margin-bottom: 0.35rem; }
+    .field-checkbox .checkbox-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-weight: normal; cursor: pointer; margin-bottom: 0;
+    }
+    .field-checkbox .checkbox-row input[type="checkbox"] {
+      flex: 0 0 auto; margin: 0; cursor: pointer;
+    }
+    .field-checkbox .checkbox-state {
+      font-size: 0.85em; color: var(--pico-muted-color);
+    }
+
     /* Settings sections — left accent + slight background to group them */
     section.settings-section {
       border-left: 3px solid var(--pico-primary);
@@ -93,7 +108,45 @@
 
     code.path { font-size: 0.82em; word-break: break-all; color: var(--pico-muted-color); }
 
-    /* Library table */
+    /* Library table — fixed layout so column widths don't dance with content
+       length (long film names, long paths, long error pills). */
+    .library-table { table-layout: fixed; width: 100%; }
+    .library-table th, .library-table td {
+      vertical-align: middle;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-table th.col-checkbox, .library-table td.col-checkbox { width: 2rem; }
+    .library-table th.col-name,     .library-table td.col-name     { width: auto; }
+    .library-table th.col-type,     .library-table td.col-type     { width: 5rem; }
+    .library-table th.col-sub,      .library-table td.col-sub      { width: 6rem; text-align: center; }
+    .library-table th.col-path,     .library-table td.col-path     { width: 28%; }
+    .library-table th.col-action,   .library-table td.col-action   { width: 8rem; }
+    .library-table th.col-result,   .library-table td.col-result   { width: 14rem; }
+
+    /* Path cells: monospace + ellipsis, full text on hover via title attr. */
+    .library-table .col-path code {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.82em;
+      color: var(--pico-muted-color);
+    }
+
+    /* Result pills (queued / queued · skipped / HTTP 4xx) — clamp to the
+       column width and wrap if absolutely needed. Long error responses
+       used to blow the layout out. */
+    .library-table .col-result .status-pill {
+      display: inline-block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: bottom;
+    }
+
     table button.subtitle-btn { padding: 0.25rem 0.7rem; font-size: 0.85em; }
     table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
     table input.item-cb, table input#select-all-cb { margin: 0; cursor: pointer; }

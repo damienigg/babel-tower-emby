@@ -24,7 +24,11 @@
       </label>
       <label>
         Target language
-        <input type="text" name="target_lang" value="{{ target_lang }}" placeholder="fr">
+        <select name="target_lang">
+          {% for code, display_name in language_options %}
+            <option value="{{ code }}" {% if target_lang == code %}selected{% endif %}>{{ display_name }} ({{ code }})</option>
+          {% endfor %}
+        </select>
       </label>
       <label>
         Mode
@@ -78,33 +82,33 @@
         <span id="batch-result" class="batch-result"></span>
       </div>
 
-      <table>
+      <table class="library-table">
         <thead>
           <tr>
-            <th style="width: 2rem;"><input type="checkbox" id="select-all-cb" aria-label="Select all visible"></th>
-            <th>Name</th>
-            <th>Type</th>
-            <th>{{ target_lang }} sub?</th>
-            <th>Path</th>
-            <th></th>
-            <th></th>
+            <th class="col-checkbox"><input type="checkbox" id="select-all-cb" aria-label="Select all visible"></th>
+            <th class="col-name">Name</th>
+            <th class="col-type">Type</th>
+            <th class="col-sub">{{ target_lang }} sub?</th>
+            <th class="col-path">Path</th>
+            <th class="col-action"></th>
+            <th class="col-result"></th>
           </tr>
         </thead>
         <tbody>
           {% for item in items %}
           <tr>
-            <td><input type="checkbox" data-item-id="{{ item.id }}" data-item-name="{{ item.name }}" class="item-cb" aria-label="Select {{ item.name }}"></td>
-            <td>{{ item.name }}</td>
-            <td>{{ item.type }}</td>
-            <td>
+            <td class="col-checkbox"><input type="checkbox" data-item-id="{{ item.id }}" data-item-name="{{ item.name }}" class="item-cb" aria-label="Select {{ item.name }}"></td>
+            <td class="col-name" title="{{ item.name }}">{{ item.name }}</td>
+            <td class="col-type">{{ item.type }}</td>
+            <td class="col-sub">
               {% if item.has_target_subtitle %}
                 <span class="status-pill ok">yes</span>
               {% else %}
                 <span class="status-pill warn">missing</span>
               {% endif %}
             </td>
-            <td><code class="path">{{ item.path }}</code></td>
-            <td>
+            <td class="col-path"><code class="path" title="{{ item.path }}">{{ item.path }}</code></td>
+            <td class="col-action">
               <button type="button" class="secondary subtitle-btn"
                       hx-post="/api/process/{{ item.id }}?target_lang={{ target_lang }}&mode={{ mode }}"
                       hx-swap="none"
@@ -112,7 +116,7 @@
                 Subtitle this
               </button>
             </td>
-            <td><span id="row-result-{{ item.id }}"></span></td>
+            <td class="col-result"><span id="row-result-{{ item.id }}"></span></td>
           </tr>
           {% endfor %}
         </tbody>
