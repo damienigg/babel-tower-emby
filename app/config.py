@@ -6,7 +6,7 @@ proxies attribute access — values written via the UI override env-bound defaul
 """
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -204,67 +204,100 @@ class SettingsStore:
         except (json.JSONDecodeError, OSError):
             return {}
 
-        # Migration: claude → llm provider rename
-        if data.get("default_translation_provider") == "claude":
-            data["default_translation_provider"] = "llm"
-
-        # Migration: collapse the old single-LLM config (llm_backend +
-        # claude_model + openai_compat_*) into the per-function slots
-        # (translation_llm_*, vision_llm_*). Run only if any old key is present.
-        old_backend = data.pop("llm_backend", None)
-        old_claude_model = data.pop("claude_model", None)
-        old_oai_url = data.pop("openai_compat_base_url", None)
-        old_oai_key = data.pop("openai_compat_api_key", None)
-        old_oai_model = data.pop("openai_compat_model", None)
-        old_supports_vision = data.pop("llm_supports_vision", None)
-
-        if old_backend is not None:
-            data.setdefault("translation_llm_type", old_backend)
-            data.setdefault("vision_llm_type", old_backend)
-        if old_backend == "anthropic" and old_claude_model is not None:
-            data.setdefault("translation_llm_model", old_claude_model)
-            data.setdefault("vision_llm_model", old_claude_model)
-        if old_backend == "openai_compat":
-            if old_oai_url is not None:
-                data.setdefault("translation_llm_endpoint", old_oai_url)
-                data.setdefault("vision_llm_endpoint", old_oai_url)
-            if old_oai_key is not None:
-                data.setdefault("translation_llm_api_key", old_oai_key)
-                data.setdefault("vision_llm_api_key", old_oai_key)
-            if old_oai_model is not None:
-                data.setdefault("translation_llm_model", old_oai_model)
-                data.setdefault("vision_llm_model", old_oai_model)
-        if old_supports_vision is not None:
-            data.setdefault("vision_llm_enabled", bool(old_supports_vision))
-            data.setdefault("translation_llm_supports_vision", bool(old_supports_vision))
-
-        # Migration: drop the shared anthropic_api_key fallback. Each slot now
-        # carries its own key. Copy the legacy shared key into both slots when
-        # they don't already have one.
-        old_anthropic_key = data.pop("anthropic_api_key", None)
-        if old_anthropic_key:
-            data.setdefault("translation_llm_api_key", old_anthropic_key)
-            data.setdefault("vision_llm_api_key", old_anthropic_key)
-
-        # Migration: emby_url / emby_api_key were renamed to media_server_url /
-        # media_server_api_key when we generalized to Emby + Jellyfin + Plex.
-        # Existing deployments had their server pre-configured under the old
-        # names; copy them over and default the new server-type to 'emby'
-        # (since that's what they were using).
-        old_emby_url = data.pop("emby_url", None)
-        old_emby_key = data.pop("emby_api_key", None)
-        if old_emby_url is not None:
-            data.setdefault("media_server_url", old_emby_url)
-        if old_emby_key is not None:
-            data.setdefault("media_server_api_key", old_emby_key)
-        if (old_emby_url or old_emby_key) and "media_server_type" not in data:
-            data["media_server_type"] = "emby"
-
+        for migration in _MIGRATIONS:
+            data = migration(data)
         return data
 
     def _save(self) -> None:
         self._file.parent.mkdir(parents=True, exist_ok=True)
         self._file.write_text(json.dumps(self._overrides, indent=2, sort_keys=True))
+
+
+# ── settings.json schema migrations ───────────────────────────────────────────
+# Each migration is an idempotent dict→dict transform applied in order at load
+# time. They handle field renames, schema collapses, and defaults backfill so
+# users don't lose their settings across version bumps. To add a new
+# migration, append a function to _MIGRATIONS at the bottom of this section.
+
+
+def _rename_translation_provider_claude_to_llm(data: dict) -> dict:
+    """Initial provider was named `claude` when the only supported LLM was
+    Anthropic. Renamed to `llm` (which dispatches to whichever LLM backend
+    is configured) when we abstracted the LLM layer."""
+    if data.get("default_translation_provider") == "claude":
+        data["default_translation_provider"] = "llm"
+    return data
+
+
+def _split_unified_llm_into_per_function_slots(data: dict) -> dict:
+    """Old single-LLM config (`llm_backend`, `claude_model`,
+    `openai_compat_*`, `llm_supports_vision`) was split into per-function
+    slots: translation_llm_* and vision_llm_*. Mirror the legacy values
+    into BOTH slots when the user hadn't already overridden them."""
+    old_backend = data.pop("llm_backend", None)
+    old_claude_model = data.pop("claude_model", None)
+    old_oai_url = data.pop("openai_compat_base_url", None)
+    old_oai_key = data.pop("openai_compat_api_key", None)
+    old_oai_model = data.pop("openai_compat_model", None)
+    old_supports_vision = data.pop("llm_supports_vision", None)
+
+    if old_backend is not None:
+        data.setdefault("translation_llm_type", old_backend)
+        data.setdefault("vision_llm_type", old_backend)
+    if old_backend == "anthropic" and old_claude_model is not None:
+        data.setdefault("translation_llm_model", old_claude_model)
+        data.setdefault("vision_llm_model", old_claude_model)
+    if old_backend == "openai_compat":
+        if old_oai_url is not None:
+            data.setdefault("translation_llm_endpoint", old_oai_url)
+            data.setdefault("vision_llm_endpoint", old_oai_url)
+        if old_oai_key is not None:
+            data.setdefault("translation_llm_api_key", old_oai_key)
+            data.setdefault("vision_llm_api_key", old_oai_key)
+        if old_oai_model is not None:
+            data.setdefault("translation_llm_model", old_oai_model)
+            data.setdefault("vision_llm_model", old_oai_model)
+    if old_supports_vision is not None:
+        data.setdefault("vision_llm_enabled", bool(old_supports_vision))
+        data.setdefault("translation_llm_supports_vision", bool(old_supports_vision))
+    return data
+
+
+def _drop_shared_anthropic_api_key(data: dict) -> dict:
+    """Earlier versions had a single `anthropic_api_key` shared by both
+    translation and vision slots. Now each slot carries its own key.
+    Backfill both slots from the shared one when they don't already
+    have a value."""
+    old = data.pop("anthropic_api_key", None)
+    if old:
+        data.setdefault("translation_llm_api_key", old)
+        data.setdefault("vision_llm_api_key", old)
+    return data
+
+
+def _rename_emby_to_media_server(data: dict) -> dict:
+    """`emby_url` / `emby_api_key` were renamed to `media_server_url` /
+    `media_server_api_key` when we generalized to Emby + Jellyfin + Plex.
+    Existing deployments had the server pre-configured under the old
+    names — copy them over and default the new server-type to 'emby'
+    since that's what they were running."""
+    old_url = data.pop("emby_url", None)
+    old_key = data.pop("emby_api_key", None)
+    if old_url is not None:
+        data.setdefault("media_server_url", old_url)
+    if old_key is not None:
+        data.setdefault("media_server_api_key", old_key)
+    if (old_url or old_key) and "media_server_type" not in data:
+        data["media_server_type"] = "emby"
+    return data
+
+
+_MIGRATIONS: list[Callable[[dict], dict]] = [
+    _rename_translation_provider_claude_to_llm,
+    _split_unified_llm_into_per_function_slots,
+    _drop_shared_anthropic_api_key,
+    _rename_emby_to_media_server,
+]
 
 
 settings = SettingsStore(_EnvSettings())
