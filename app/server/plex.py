@@ -1,26 +1,38 @@
 """Plex Media Server client.
 
-Plex's REST API is structurally different from Emby/Jellyfin:
+Plex's REST API is structurally different from Emby/Jellyfin. Verified
+against the official Plex Media Server API docs at developer.plex.tv/pms
+and python-plexapi (the de-facto reference Python wrapper) on the
+endpoints we use:
 
-- Auth is `X-Plex-Token: <token>` (never `X-Emby-Token`).
-- Default response is XML; we send `Accept: application/json` everywhere
-  to get JSON-shaped responses.
-- There's no single `/Items?Recursive=true` endpoint. Library items live
-  per *section* (`/library/sections/{key}/all`), and we have to discover
-  the video-bearing sections first via `/library/sections`. list_videos
-  aggregates across all video sections.
-- Each item identifier is `ratingKey` (Plex's stable item id), exposed
-  to callers as `MediaItem.id`.
-- Disk path lives at `Media[].Part[].file`, streams at
-  `Media[].Part[].Stream[]` with `streamType` 1/2/3 (video/audio/subtitle).
-- Pagination uses `X-Plex-Container-Start` / `X-Plex-Container-Size`
-  query params (also accepted as headers).
-- Refresh trigger: `PUT /library/metadata/{ratingKey}/refresh`.
+- Auth: `X-Plex-Token: <token>` header. Most endpoints 401 without it
+  EXCEPT the public discovery ones (`/`, `/identity`) which return
+  200 to anonymous callers — that's why `health()` below probes
+  `/library/sections` instead, so a green pill actually means
+  "URL + token both work".
+- Default response is XML; we send `Accept: application/json` to get
+  JSON. Both formats wrap data in a `MediaContainer` root object.
+- No unified recursive query — library items live per *section*
+  (`/library/sections/{key}/all`). We discover sections first via
+  `/library/sections`. list_videos aggregates across all video
+  sections, querying each with the right type filter for that
+  section's content kind (movie sections → type=1 movies, show
+  sections → type=4 episodes).
+- Each item id is `ratingKey` (Plex's stable id), exposed to callers
+  as `MediaItem.id`.
+- Disk path lives at `Media[0].Part[0].file`; streams at
+  `Media[0].Part[0].Stream[]` with `streamType` 1/2/3
+  (video/audio/subtitle).
+- Pagination via `X-Plex-Container-Start` / `X-Plex-Container-Size`,
+  accepted as either headers or query params per the docs (we use
+  query params for clean httpx integration).
+- Refresh: `PUT /library/metadata/{ratingKey}/refresh` — verified in
+  python-plexapi's PlexPartialObject.refresh().
 
 For language matching, Plex tags streams with `languageCode` (ISO 639-2)
-and sometimes `languageTag` (BCP 47); we feed whichever we get to
-lang.normalize() so MediaItem.has_subtitle_track works the same way as
-for Emby/Jellyfin.
+and sometimes `languageTag` (BCP 47); we feed whichever is present to
+lang.normalize() so MediaItem.has_subtitle_track works identically for
+Emby/Jellyfin and Plex.
 """
 from typing import Any
 
@@ -35,13 +47,22 @@ from app.server.base import (
 )
 
 
-# Plex content type codes — see https://plexapi.dev/api/library
+# Plex content type codes (from the official API enum).
 _TYPE_MOVIE = 1
+_TYPE_SHOW = 2
+_TYPE_SEASON = 3
 _TYPE_EPISODE = 4
-# Comma-separated for the `type` filter on /library/sections/{key}/all
-_VIDEO_TYPES_PARAM = f"{_TYPE_MOVIE},{_TYPE_EPISODE}"
 
-# Plex stream type codes
+# For each Plex *section* type, the *content* type we want when listing
+# items for subtitling. Movie sections → individual movies; show sections
+# → individual episodes (NOT shows — shows are folders, we want the
+# leaf media items with actual video files).
+_SECTION_TO_VIDEO_TYPE: dict[str, int] = {
+    "movie": _TYPE_MOVIE,
+    "show": _TYPE_EPISODE,
+}
+
+# Plex stream type codes (also from the official API enum).
 _STREAM_VIDEO = 1
 _STREAM_AUDIO = 2
 _STREAM_SUBTITLE = 3
@@ -65,17 +86,20 @@ class PlexClient(MediaServerClient):
             verify=verify_ssl,
         )
         # Cached after first discovery — Plex section list is small and stable.
-        self._video_section_keys: list[str] | None = None
+        # Each entry is (section_key, video_type_code) — see _video_sections.
+        self._video_sections_cache: list[tuple[str, int]] | None = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def health(self) -> bool:
-        # `/identity` is the canonical "who are you?" probe and 401s on a
-        # bad token, so a 200 means BOTH "server reachable" AND "our auth
-        # works". `/` would 200 even with no/bad token, which made the
-        # health pill green for misconfigured users.
+        # Probe an auth-required endpoint so a green pill confirms BOTH
+        # "server reachable" AND "X-Plex-Token works". The previously-used
+        # `/identity` and `/` endpoints both return 200 to anonymous calls
+        # per the Plex docs, so they couldn't catch a wrong token.
+        # `/library/sections` is the natural choice — it's auth-required
+        # AND it's exactly what we'd hit on the next real call anyway.
         try:
-            r = self._http.get(f"{self._base}/identity")
+            r = self._http.get(f"{self._base}/library/sections")
             return r.status_code == 200
         except httpx.HTTPError:
             return False
@@ -99,15 +123,21 @@ class PlexClient(MediaServerClient):
         search_term: str | None = None,
     ) -> MediaPage:
         """Aggregate one page across all video sections. Plex has no unified
-        recursive query, so we sum totals across sections and slice the
-        concatenated items at the requested window. For huge libraries the
-        non-search path can be slow on later pages — search-by-title is the
-        fast path, served directly by Plex's per-section title filter."""
+        recursive query, so we issue one call per (section, content-type)
+        pair: movie sections fetch type=1 (movies), show sections fetch
+        type=4 (episodes — the leaf items with actual video files, NOT
+        the show folders). Search-by-title is the fast path; the
+        unfiltered listing pulls everything per section so later pages
+        don't require expensive offsets."""
         all_items: list[MediaItem] = []
         total = 0
-        for section_key in self._video_sections():
+        for section_key, type_code in self._video_sections():
             page = self._section_page(
-                section_key, start_index=0, limit=10_000, search_term=search_term,
+                section_key,
+                type_code=type_code,
+                start_index=0,
+                limit=10_000,
+                search_term=search_term,
             )
             all_items.extend(page.items)
             total += page.total
@@ -124,40 +154,55 @@ class PlexClient(MediaServerClient):
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
-    def _video_sections(self) -> list[str]:
-        """Discover (and cache) the keys of library sections that contain
-        videos — Plex section types `movie` and `show`."""
-        if self._video_section_keys is not None:
-            return self._video_section_keys
+    def _video_sections(self) -> list[tuple[str, int]]:
+        """Discover (and cache) the video-bearing library sections, paired
+        with the content-type filter to use against each.
+
+        Returns a list of (section_key, video_type_code) tuples:
+        - movie sections → type=1 (individual movies)
+        - show sections → type=4 (individual episodes, not shows/seasons)
+
+        Music ('artist') and photo ('photo') sections are skipped — we
+        only subtitle videos.
+        """
+        if self._video_sections_cache is not None:
+            return self._video_sections_cache
         r = self._http.get(f"{self._base}/library/sections")
         if r.status_code != 200:
             raise MediaServerError(
                 f"GET /library/sections → HTTP {r.status_code}: {r.text[:200]}"
             )
         directories = (r.json().get("MediaContainer") or {}).get("Directory") or []
-        keys = [
-            str(d["key"]) for d in directories
-            if d.get("type") in ("movie", "show", "video") and d.get("key")
-        ]
-        self._video_section_keys = keys
-        return keys
+        pairs: list[tuple[str, int]] = []
+        for d in directories:
+            section_type = d.get("type")
+            video_type = _SECTION_TO_VIDEO_TYPE.get(section_type)
+            key = d.get("key")
+            if video_type is not None and key is not None:
+                pairs.append((str(key), video_type))
+        self._video_sections_cache = pairs
+        return pairs
 
     def _section_page(
         self,
         section_key: str,
         *,
+        type_code: int,
         start_index: int,
         limit: int,
         search_term: str | None = None,
     ) -> MediaPage:
-        """Fetch one page from a single section, filtered to movies + episodes."""
+        """Fetch one page of a specific content type from a single section.
+        type_code is one of _TYPE_MOVIE / _TYPE_EPISODE — Plex's per-call
+        filter only accepts a single integer (no comma-separated lists).
+        """
         params: dict[str, Any] = {
-            "type": _VIDEO_TYPES_PARAM,
+            "type": type_code,
             "X-Plex-Container-Start": start_index,
             "X-Plex-Container-Size": limit,
         }
         if search_term:
-            # Plex's per-section filter for substring title match.
+            # Plex's per-section title filter for substring match.
             params["title"] = search_term
 
         r = self._http.get(
@@ -172,9 +217,9 @@ class PlexClient(MediaServerClient):
         body = (r.json().get("MediaContainer") or {})
         metadata = body.get("Metadata") or []
         items = [_item_from_metadata(m) for m in metadata]
-        # Plex's totalSize is the unfiltered section count; size is the
-        # number of items in this response. list_videos sums totals across
-        # sections so the slight imprecision is fine for the UI.
+        # totalSize = the section's full count for this query; size = the
+        # number returned in this page. list_videos aggregates totals
+        # across (section, type) pairs.
         total = int(body.get("totalSize") or body.get("size") or len(items))
         return MediaPage(items=items, total=total)
 

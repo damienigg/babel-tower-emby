@@ -136,23 +136,24 @@ def _resp(payload: dict, status: int = 200) -> httpx.Response:
     return httpx.Response(status, json=payload)
 
 
-def test_health_probes_identity_endpoint():
-    """/identity is the canonical Plex probe — 200 means token works,
-    401 means bad/missing token. We don't want to call /  which 200s
-    even for unauthenticated requests."""
+def test_health_probes_auth_required_endpoint():
+    """`/identity` returns 200 anonymously per the Plex docs, so it can't
+    detect a bad token. health() must hit an auth-required endpoint —
+    /library/sections is the natural choice (and what we'd hit on the
+    next real call anyway)."""
     seen_paths = []
 
     def handler(req):
         seen_paths.append(req.url.path)
-        return _resp({"MediaContainer": {"machineIdentifier": "abc"}})
+        return _resp({"MediaContainer": {"Directory": []}})
     pc = _client_with_mock(handler)
     assert pc.health() is True
-    assert seen_paths == ["/identity"]
+    assert seen_paths == ["/library/sections"]
 
 
 def test_health_returns_false_on_401():
-    """Bad token → /identity 401s → health is False (the old impl hit /
-    which 200s for unauth, so a misconfigured user got a green pill)."""
+    """Bad token → /library/sections 401s → health is False. This is the
+    crucial difference vs probing an unauthenticated endpoint."""
     def handler(req):
         return httpx.Response(401, text="invalid token")
     pc = _client_with_mock(handler)
@@ -166,7 +167,10 @@ def test_health_returns_false_on_500():
     assert pc.health() is False
 
 
-def test_video_section_discovery_caches_keys():
+def test_video_section_discovery_pairs_sections_with_video_type():
+    """_video_sections returns (section_key, video_type_code) tuples:
+    movie sections → type=1 (movies), show sections → type=4 (episodes,
+    not shows themselves). Music + photos are skipped."""
     calls = []
 
     def handler(req):
@@ -185,12 +189,12 @@ def test_video_section_discovery_caches_keys():
         raise AssertionError(f"unexpected request: {req.url.path}")
 
     pc = _client_with_mock(handler)
-    keys1 = pc._video_sections()
-    keys2 = pc._video_sections()
-    # Music + photos filtered out, only movie/show kept.
-    assert keys1 == ["1", "2"]
+    pairs1 = pc._video_sections()
+    pairs2 = pc._video_sections()
+    # Movie section → 1 (movies); show section → 4 (episodes).
+    assert pairs1 == [("1", 1), ("2", 4)]
     # Second call hits the cache — only one HTTP request total.
-    assert keys2 == keys1
+    assert pairs2 == pairs1
     assert calls.count("/library/sections") == 1
 
 
@@ -218,7 +222,11 @@ def test_refresh_item_uses_put():
 
 def test_list_videos_aggregates_across_sections():
     """Plex has no unified video query; we fetch from each video section
-    and concatenate. start_index/limit slice the aggregated list."""
+    and concatenate. start_index/limit slice the aggregated list. Each
+    call carries the correct type filter — type=1 for movie sections,
+    type=4 for show sections (episodes, not shows themselves)."""
+    seen_section_calls: list[tuple[str, str]] = []
+
     def handler(req):
         if req.url.path == "/library/sections":
             return _resp({
@@ -230,6 +238,7 @@ def test_list_videos_aggregates_across_sections():
                 }
             })
         if req.url.path == "/library/sections/1/all":
+            seen_section_calls.append((req.url.path, req.url.params.get("type", "")))
             return _resp({
                 "MediaContainer": {
                     "totalSize": 2,
@@ -242,6 +251,7 @@ def test_list_videos_aggregates_across_sections():
                 }
             })
         if req.url.path == "/library/sections/2/all":
+            seen_section_calls.append((req.url.path, req.url.params.get("type", "")))
             return _resp({
                 "MediaContainer": {
                     "totalSize": 1,
@@ -257,6 +267,13 @@ def test_list_videos_aggregates_across_sections():
     page = pc.list_videos(start_index=0, limit=10)
     assert page.total == 3
     assert [it.id for it in page.items] == ["11", "12", "21"]
-    # And the aggregate slice respects start_index/limit
+    # The aggregate slice respects start_index/limit
     page2 = pc.list_videos(start_index=1, limit=1)
     assert [it.id for it in page2.items] == ["12"]
+    # Critical: each section was queried with a SINGLE-INTEGER type filter,
+    # not a comma-separated list. The Plex API doesn't support multi-type
+    # filters in one call.
+    movie_calls = [t for p, t in seen_section_calls if p == "/library/sections/1/all"]
+    show_calls = [t for p, t in seen_section_calls if p == "/library/sections/2/all"]
+    assert all(t == "1" for t in movie_calls), f"movie section should ask type=1, got {movie_calls}"
+    assert all(t == "4" for t in show_calls), f"show section should ask type=4, got {show_calls}"
