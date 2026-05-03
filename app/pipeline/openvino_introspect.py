@@ -24,20 +24,37 @@ import logging
 
 _log = logging.getLogger("subtitle_this")
 
-# Last-seen device pick per model label. Populated by log_selected_device on
-# every successful introspection so the UI can read the actual pick (e.g.
-# "GPU" or "CPU") via a status endpoint, instead of the user having to grep
-# docker logs. Process-local; resets on container restart.
-_last_selected: dict[str, dict] = {}
+# Per loaded model, we keep:
+#   - the original "requested" device string (what we asked AUTO for)
+#   - a reference to the model itself, so we can re-query its current
+#     EXECUTION_DEVICES every time the UI asks for status
+#
+# OpenVINO's AUTO plugin uses a "first inference latency" trick where it
+# starts on CPU while GPU compilation runs in parallel, then PROMOTES to
+# GPU once the compile finishes. So the device at load time can differ
+# from the device at inference time. Re-introspecting on each status
+# request is the only way to surface this honestly.
+#
+# The model is already pinned in memory by the lru_cache in stt_openvino,
+# so holding an extra reference here costs nothing extra.
+_loaded: dict[str, dict] = {}
 
 
 def selected_devices_snapshot() -> dict[str, dict]:
-    """Return a copy of the device-selection registry, for the UI status
-    endpoint. Each entry is keyed by a model label (e.g. 'whisper:small')
-    and has shape:
-        {"requested": "AUTO", "selected": ["GPU"]}
-    Empty dict when no model has loaded yet (cold start)."""
-    return {k: dict(v) for k, v in _last_selected.items()}
+    """Return a fresh device-selection snapshot. Each entry has shape:
+        {"requested": "AUTO", "selected": ["GPU.0"]}
+    by re-querying EXECUTION_DEVICES on each registered model — so the
+    UI sees the post-promotion device after AUTO finishes its first
+    inference dance, not the stale CPU snapshot from load time."""
+    out: dict[str, dict] = {}
+    for label, entry in _loaded.items():
+        model = entry.get("model")
+        selected = _selected_devices(model) if model is not None else None
+        out[label] = {
+            "requested": entry.get("requested", ""),
+            "selected": list(selected) if selected else [],
+        }
+    return out
 
 
 def log_selected_device(label: str, *, requested: str, model) -> None:
@@ -53,6 +70,11 @@ def log_selected_device(label: str, *, requested: str, model) -> None:
     inner CompiledModel and read its EXECUTION_DEVICES property (an OpenVINO
     convention for "which actual device did AUTO route inference to").
     """
+    # Register the model so future status calls can re-introspect its
+    # CURRENT execution device — AUTO often promotes from CPU → GPU after
+    # the first inference, and the UI should reflect that.
+    _loaded[label] = {"requested": requested, "model": model}
+
     selected = _selected_devices(model)
     if selected is None:
         _log.warning(
@@ -60,13 +82,12 @@ def log_selected_device(label: str, *, requested: str, model) -> None:
             "(could not introspect — optimum-intel layout may have changed)",
             label, requested,
         )
-        _last_selected[label] = {"requested": requested, "selected": []}
         return
     _log.info(
-        "[openvino] %s  requested=%s  selected=%s",
+        "[openvino] %s  requested=%s  selected=%s "
+        "(may auto-promote to GPU after first inference)",
         label, requested, ",".join(selected) or "?",
     )
-    _last_selected[label] = {"requested": requested, "selected": selected}
 
 
 def _selected_devices(model) -> list[str] | None:
