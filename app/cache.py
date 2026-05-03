@@ -99,6 +99,7 @@ def cache_key(
     scene_threshold: float | None = None,
     translation_llm_model: str | None = None,
     vision_llm_model: str | None = None,
+    vad_enabled: bool | None = None,
 ) -> str:
     """Build a stable cache key. Each kwarg is included only when relevant —
     callers pass None for kwargs that don't affect the output for their request:
@@ -111,6 +112,12 @@ def cache_key(
       cache.
     - `vision_llm_model`: relevant for scene/cinematic modes (the bible content
       depends on which LLM described the keyframes).
+    - `vad_enabled`: relevant only for the OpenVINO STT backend, where the
+      VAD pre-filter materially changes the cue list (silence-region
+      hallucinations vs. clean output). The CPU/`faster-whisper` backend has
+      its own internal VAD unrelated to this flag, so callers pass None for
+      it. Pre-VAD entries (written before the flag existed) used None as
+      well, so they get cleanly invalidated when the new code passes True.
     """
     parts = [
         media_fingerprint,
@@ -126,6 +133,8 @@ def cache_key(
         parts.append(f"tllm={translation_llm_model}")
     if vision_llm_model:
         parts.append(f"vllm={vision_llm_model}")
+    if vad_enabled is not None:
+        parts.append(f"vad={int(vad_enabled)}")
     raw = "|".join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
@@ -165,6 +174,7 @@ def lookup_two_level(
     scene_threshold: float | None = None,
     translation_llm_model: str | None = None,
     vision_llm_model: str | None = None,
+    vad_enabled: bool | None = None,
 ) -> tuple[dict | None, str, str]:
     """Look up a cached payload using both fingerprints. Returns
     `(cached_payload_or_None, quick_key, content_key)`.
@@ -182,6 +192,7 @@ def lookup_two_level(
         scene_threshold=scene_threshold,
         translation_llm_model=translation_llm_model,
         vision_llm_model=vision_llm_model,
+        vad_enabled=vad_enabled,
     )
     quick_fp = quick_fingerprint(media)
     quick_key = cache_key(quick_fp, **key_kwargs)
@@ -217,6 +228,7 @@ def store_two_level(
     scene_threshold: float | None = None,
     translation_llm_model: str | None = None,
     vision_llm_model: str | None = None,
+    vad_enabled: bool | None = None,
 ) -> None:
     """Store the payload under both the quick and content keys so future
     lookups can hit either one."""
@@ -226,6 +238,7 @@ def store_two_level(
         scene_threshold=scene_threshold,
         translation_llm_model=translation_llm_model,
         vision_llm_model=vision_llm_model,
+        vad_enabled=vad_enabled,
     )
     quick_fp = quick_fingerprint(media)
     content_fp = content_fingerprint(media)

@@ -27,6 +27,15 @@ class _EnvSettings(BaseSettings):
     # add no value over AUTO and confused users. Power users can still
     # override via BABEL_OPENVINO_DEVICE env var.
     openvino_device: str = "AUTO"
+    # Pre-filter audio with Silero-VAD before feeding it to Whisper so silent
+    # stretches never reach the decoder. Default ON — without it, the OpenVINO
+    # backend hallucinates boilerplate ("Thank you.", "Thanks for watching.")
+    # in silent regions because direct OVModel.generate() bypasses Whisper's
+    # built-in no-speech / log-prob guards. Net runtime is also faster (skips
+    # 30–50% of audio in a typical film). Off only as an escape hatch for
+    # very-quiet-but-real-speech files where Silero may be too strict; the
+    # CPU/faster-whisper backend has its own VAD and ignores this flag.
+    vad_enabled: bool = True
 
     # ── Translation LLM ───────────────────────────────────────────────────────
     # Translates subtitle cues. In cinematic mode, also receives per-cue frames

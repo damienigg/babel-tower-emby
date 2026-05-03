@@ -33,7 +33,8 @@ RUN pip install --no-cache-dir \
     'transformers>=4.45' \
     'sentencepiece>=0.2' \
     'soundfile>=0.12' \
-    'faster-whisper>=1.1'
+    'faster-whisper>=1.1' \
+    'silero-vad>=5.1'
 
 COPY --chown=app:app app/ ./app/
 

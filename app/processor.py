@@ -184,12 +184,20 @@ def process(
     # - For provider=llm, the translation LLM model (output depends on it
     #   directly). DeepL/NLLB don't have a model setting that varies, so we
     #   pass None and they fall through to a single key per provider.
+    # - For the OpenVINO STT backend, vad_enabled materially changes the cue
+    #   list (silence-region hallucinations vs. clean output). The CPU
+    #   backend's VAD is internal to faster-whisper and unrelated, so we
+    #   pass None for it and avoid spuriously invalidating CPU cache entries
+    #   when this flag is toggled.
     threshold = settings.scene_detection_threshold if req.mode in MULTIMODAL_MODES else None
     tllm_model = (
         settings.translation_llm_model if req.translation_provider == "llm" else None
     )
     vllm_model = (
         settings.vision_llm_model if req.mode in MULTIMODAL_MODES else None
+    )
+    vad_enabled_key = (
+        settings.vad_enabled if settings.whisper_backend.lower() == "openvino" else None
     )
     key_kwargs = dict(
         target_lang=req.target_lang,
@@ -200,6 +208,7 @@ def process(
         scene_threshold=threshold,
         translation_llm_model=tllm_model,
         vision_llm_model=vllm_model,
+        vad_enabled=vad_enabled_key,
     )
     # Two-level cache: the quick (path+mtime) fingerprint is the hot path;
     # the content (mid-file bytes) fingerprint is a stable fallback that

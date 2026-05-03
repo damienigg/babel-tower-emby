@@ -77,6 +77,39 @@ def test_cache_key_omits_llm_args_when_none():
     assert a == b
 
 
+def test_cache_key_distinguishes_vad_enabled_for_openvino_runs():
+    """The OpenVINO backend's VAD pre-filter materially changes cues
+    (silence-region hallucinations vs. clean output). Toggling it must
+    produce a different cache key so the user doesn't get the old
+    pre-VAD result back on re-run."""
+    a = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio", vad_enabled=True)
+    b = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio", vad_enabled=False)
+    assert a != b
+
+
+def test_cache_key_omits_vad_when_none():
+    """The CPU/faster-whisper backend has its own internal VAD unrelated to
+    this flag; the processor passes None for those runs so toggling the
+    user-facing setting doesn't fragment the CPU-backend cache. None must
+    also match the pre-flag key shape so existing entries written before
+    the flag existed still resolve identically."""
+    a = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio")
+    b = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio", vad_enabled=None)
+    assert a == b
+
+
+def test_cache_key_pre_vad_entry_does_not_resolve_for_openvino_user():
+    """The headline correctness check for this whole change. Before the
+    flag existed, OpenVINO entries were written with no vad info. After
+    the change, OpenVINO lookups pass vad_enabled=True. Those keys MUST
+    differ — otherwise the user gets the old hallucinated VTT back from
+    cache and never sees the fix."""
+    pre_vad = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio")
+    new_with_vad = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio",
+                                   vad_enabled=True)
+    assert pre_vad != new_with_vad
+
+
 def test_cache_load_missing_returns_none(tmp_path, monkeypatch):
     from app.config import settings as _settings
     monkeypatch.setattr(_settings._env, "cache_dir", tmp_path)

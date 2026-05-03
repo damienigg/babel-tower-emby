@@ -5,6 +5,31 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 follows [Semantic Versioning](https://semver.org/) — though as a 0.x release
 expect breaking changes between minor versions until 1.0.
 
+## [Unreleased]
+
+### Fixed
+- **OpenVINO STT no longer hallucinates on silence.** The OpenVINO backend
+  calls `OVModel.generate()` directly (to dodge the HF pipeline's CPU↔iGPU
+  round-trip), which means it bypasses Whisper's built-in no-speech /
+  log-prob / compression-ratio guards. On silent audio — establishing
+  shots, music cues, action without dialogue — the autoregressive decoder
+  was inventing boilerplate from its language prior ("Thank you.",
+  "Thanks for watching.", repeated lines). Pre-filtering with Silero-VAD
+  and chunking strictly within speech regions kills this entirely. Side
+  effect: typical films are 30–50 % silence, so transcription is also
+  meaningfully faster (a 47 min run on a 2h28 film should drop to roughly
+  half that on the same hardware). Add `BABEL_VAD_ENABLED=false` (or the
+  Settings toggle) as an escape hatch for very-quiet-but-real-speech
+  files where Silero is too strict. The CPU/`faster-whisper` backend
+  already had its own VAD (`vad_filter=True`) and is unchanged.
+
+  Cache invalidation: `vad_enabled` is now part of the cache key for
+  OpenVINO runs (and only for OpenVINO runs — the CPU backend's VAD is
+  unrelated). Existing OpenVINO cache entries written before this change
+  will miss on first re-run and recompute cleanly, so users automatically
+  get the fix applied to films they've already processed. CPU-backend
+  entries are unaffected.
+
 ## [0.4.0] — 2026-05-03
 
 The post-rename refinement release. The 0.3.0 → 0.4.0 jump consolidates a
