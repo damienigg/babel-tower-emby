@@ -3,9 +3,10 @@ the Emby-driven job runner call into here, so behavior stays consistent.
 
 Modes:
 - `audio` — Whisper → text translator. No vision.
-- `scene` — adds a Claude-vision scene bible: detect shots, extract one
-  keyframe per shot, ask Claude for a 1-2 sentence description of each, then
-  send the whole bible as cached system context for the translation calls.
+- `scene` — adds an LLM-vision scene bible: detect shots, extract one
+  keyframe per shot, ask the configured Vision LLM for a 1-2 sentence
+  description of each, then send the whole bible as cached system context for
+  the translation calls.
 - `cinematic` — everything `scene` does, plus a per-cue keyframe attached as
   an image block to the translation call so the translator literally sees what
   is on screen for each line.

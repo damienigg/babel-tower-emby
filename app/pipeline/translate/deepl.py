@@ -42,7 +42,7 @@ class DeepLProvider:
 
     def translate(self, cues: list[Cue], source_lang: str, target_lang: str, context=None) -> list[Cue]:
         # DeepL is text-only — `context` (scene bible / per-cue frames) is silently
-        # ignored. The processor enforces that scene/cinematic modes use Claude.
+        # ignored. The processor enforces that scene/cinematic modes use the LLM provider.
         if target_lang not in _TARGET_LANG:
             raise TranslationError(f"DeepL does not support target language {target_lang!r}")
 

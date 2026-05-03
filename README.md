@@ -1,80 +1,88 @@
 # Babel Tower Emby
 
-Auto-generates target-language subtitles for media in your Emby library — YouTube auto-caption style — using Whisper for speech-to-text and an LLM for translation. Single-service: a single Python/FastAPI service (Docker) that talks to Emby's REST API directly. No Emby plugin to install.
+Auto-generates target-language subtitles for media in your Emby library — YouTube auto-caption style — using Whisper for speech-to-text and an LLM of your choice for translation. Single-service: a single Python/FastAPI app (Docker) that talks to Emby's REST API directly. No Emby plugin to install.
+
+**LLM-agnostic by design.** You pick the translation engine and (optionally) the vision engine, configure them entirely from the web UI, and Babel Tower abstracts the rest. Cloud (Anthropic / OpenAI / Gemini / OpenRouter / DeepSeek / Zhipu / …) or fully local (Ollama / LM Studio / LocalAI / vLLM / llama.cpp) — same UI, same UX.
 
 ## Architecture
 
 ```
                            ┌──────────────────────────────────────────┐
                            │ babel-tower-emby (FastAPI, Docker)       │
-   user (web UI / curl) ──▶│  Web UI (Jinja2)                         │
+   user (web UI / curl) ──▶│  Web UI (Jinja2 — settings, library,     │
+                           │            jobs, sweep)                  │
                            │  REST API                                │
    Emby Server ◀───────────│  Emby REST client (httpx)                │
    (path resolve,          │  Pipeline: ffprobe + ffmpeg              │
     metadata refresh)      │     → Whisper (CPU or OpenVINO iGPU)     │
-                           │     → Claude / DeepL / NLLB              │
+                           │     → LLM / DeepL / NLLB                 │
                            │     → WebVTT writer                      │
    media volume (rw) ◀─────│  (writes Movie.<lang>.<mode>.ai.vtt)     │
                            └──────────────────────────────────────────┘
 ```
 
 Babel Tower is the single integration point. Triggers come from three places:
-- **Web UI** at `http://<host>:8765/` — settings, status, manual jobs
+- **Web UI** at `http://<host>:8765/` — settings, status, manual jobs, library sweep
 - **REST API** — `POST /api/process/{embyItemId}` or `POST /transcribe-translate` (path-based)
-- **Emby webhook** (next pass) — auto-trigger on `ItemAdded`
+- **Emby webhook** — `/webhook/emby` auto-triggers on `ItemAdded`
 
-## Status
+## What you do as a user
 
-- **v0.2:** Web UI + Emby REST client + manual job submission, audio-only mode, three translation providers (Claude / DeepL / NLLB), CPU and OpenVINO iGPU STT, file-based cache + persisted UI settings, Docker, GHCR-publishable.
-- **Next passes:** Emby webhook receiver (auto-trigger on new items), library sweep, scene-summary mode, full cinematic mode.
+The whole point of Babel Tower is that you never edit a config file. You bring up the container, open `http://<host>:8765/`, and configure everything from three pages:
+
+1. **Settings page** — pick your translation engine (LLM or DeepL or NLLB), pick your vision engine (only if you want scene/cinematic modes), paste API keys, point at endpoints. All persisted to disk and applied at runtime — no restart needed.
+2. **Library page** — browse Emby items, filter to "missing target-language sub", click *Subtitle this* on a single item, or hit *Sweep* to queue every missing one in the background.
+3. **Dashboard** — watch jobs progress in real time, sees Emby/STT/LLM status pills.
+
+That's it. Env vars exist as an optional first-boot fallback for declarative deployments (TrueNAS YAML, etc.) — see the [Power-user knobs](#power-user-knobs) section at the bottom — but the canonical configuration surface is the web UI.
 
 ## Quality tiers (modes)
 
 The mode controls how much visual context the translator gets. The tier is encoded in the output filename — `Movie.fr.audio.ai.vtt` vs `Movie.fr.scene.ai.vtt` vs `Movie.fr.cinematic.ai.vtt` — so multiple tiers can coexist for the same media without overwriting each other, and the cache is keyed by tier.
 
 | Mode        | What it does                                                                                                                                                                                                                                       | Cost     | Time                       |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------- |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------- |
 | `audio`     | Whisper transcript → text translator. Speech only.                                                                                                                                                                                                 | $        | Whisper-bound only         |
-| `scene`     | Detect shots with ffmpeg's scene filter → extract one keyframe per shot → Claude vision generates a 1–2 sentence "scene bible" → translator gets it as cached system context plus a per-cue scene tag. Improves pronoun/gender/referent disambiguation. | $$       | + scene detection (5–15 min for a 2h film) + ~20 vision calls |
-| `cinematic` | Everything `scene` does **plus** one keyframe per cue attached as an image to translation calls. The translator literally sees what's on screen for each line.                                                                                     | $$$      | + per-cue frame extraction (slow, sequential) + many more API calls |
+| `scene`     | Detect shots with ffmpeg's scene filter → extract one keyframe per shot → the configured **Vision LLM** generates a 1–2 sentence "scene bible" → translator gets it as cached system context plus a per-cue scene tag. Improves pronoun/gender/referent disambiguation. | $$       | + scene detection (5–15 min for a 2h film) + ~20 vision calls |
+| `cinematic` | Everything `scene` does **plus** one keyframe per cue attached as an image to translation calls. The translator literally sees what's on screen for each line.                                                                                       | $$$      | + per-cue frame extraction (slow, sequential) + many more API calls |
 
 Default is `audio`. Change via Settings → Defaults → Quality tier, or per-request via the API body's `mode` field.
 
-**`scene` and `cinematic` require `translation_provider="claude"`** — they use Claude's vision API to read the keyframes. The processor refuses with a 400 if you combine them with DeepL or NLLB.
+**`scene` and `cinematic` require translation provider = `llm`** with a vision-capable model — they read the keyframes through your Vision LLM and (in cinematic) attach frames to your Translation LLM. The processor refuses with a 400 if you combine them with DeepL or NLLB (text-only providers) or with a translation model you've flagged non-vision.
 
-The scene bible is cached on disk per `(file fingerprint, claude model, detection threshold)`, so once it's built, switching target language or going from `scene` to `cinematic` reuses it without re-running the vision pass.
+The scene bible is cached on disk per `(file fingerprint, vision LLM model id, detection threshold)`, so once it's built, switching target language or going from `scene` to `cinematic` reuses it without re-running the vision pass.
 
 ## Translation providers
 
-Three providers, picked via `translation_provider`:
+Three providers, picked from Settings → Defaults → *Who translates the cues?*:
 
 | Provider | Quality                                                                                         | Cost                                                | Where it runs              | Languages                |
 | -------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------- | -------------------------- | ------------------------ |
-| `llm`    | Best — uses whichever LLM backend is configured. Idioms, nuance, cross-cue context, vision-aware in scene/cinematic modes. | Pay-per-token (cloud) or free (local LLM).          | Whatever you point it at   | Everything the LLM knows |
+| `llm`    | Best — uses whichever LLM you configured. Idioms, nuance, cross-cue context, vision-aware in scene/cinematic modes. | Pay-per-token (cloud) or free (local LLM).          | Whatever you point it at   | Everything the LLM knows |
 | `deepl`  | Excellent for EU langs, best in class on those pairs. Text-only, no cross-cue context.          | Free tier: 500k chars/month (~6 movies). Paid above. | Cloud (DeepL API)          | ~30 (EU + EA majors)     |
-| `nllb`   | Fair-to-good. Covers the long tail of languages.                                                | Free, offline.                                       | Local — Intel iGPU via OpenVINO | 200 (FLORES-200 set) |
+| `nllb`   | Fair-to-good. Covers the long tail of languages.                                                | Free, offline.                                      | Local — Intel iGPU via OpenVINO | 200 (FLORES-200 set) |
 
 ### LLM models — split by function
 
-The `llm` provider and the scene-bible builder talk to LLMs. We split them into **two function-named slots**, each independently configurable, so power users can mix-and-match (e.g. cheap fast text model for translation + strong vision model for scene descriptions).
+The `llm` provider and the scene-bible builder talk to LLMs. Babel Tower exposes them as **two function-named slots** in the settings UI — *Translation model* and *Vision model* — each independently configurable, so you can mix-and-match (e.g. cheap fast text model for translation + strong vision model for scene descriptions).
 
 #### Translation model
 
-Translates subtitle cues. In cinematic mode this same model also receives per-cue keyframes — pick a vision-capable one if you plan to use cinematic.
+Translates subtitle cues. In cinematic mode this same model also receives per-cue keyframes — pick a vision-capable one and tick the *Supports vision* checkbox if you plan to use cinematic.
 
-What makes a good translator: large parameter count, broad multilingual training, strong instruction-following. Examples:
+What makes a good translator: large parameter count, broad multilingual training, strong instruction-following.
 
-| Tier                | Cloud                                                 | Open-source — Chinese-strong                  | Open-source — general                                           |
-| ------------------- | ----------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------------- |
-| Frontier            | claude-opus-4-7, gpt-4o, gemini-1.5-pro, mistral-large | qwen2.5:72b, deepseek-v3, glm-4-flash         | llama3.1:70b, llama3.3:70b, command-r-plus                      |
-| Mid-tier            | claude-sonnet-4-6, gpt-4o-mini, gemini-2.0-flash      | qwen2.5:32b, qwen2.5:14b                      | mistral-large, llama3.1:8b, gemma2:27b                          |
-| Cheap & fast        | claude-haiku-4-5, gpt-4o-mini                          | qwen2.5:7b                                    | llama3.1:8b, gemma2:9b                                          |
+| Tier                | Cloud                                                            | Open-source — Chinese-strong              | Open-source — general                                       |
+| ------------------- | ---------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------- |
+| Frontier            | claude-opus-4-7, gpt-4o, gemini-1.5-pro, mistral-large           | qwen2.5:72b, deepseek-v3, glm-4-flash     | llama3.1:70b, llama3.3:70b, command-r-plus                  |
+| Mid-tier            | claude-sonnet-4-6, gpt-4o-mini, gemini-2.0-flash                 | qwen2.5:32b, qwen2.5:14b                  | mistral-large, llama3.1:8b, gemma2:27b                      |
+| Cheap & fast        | claude-haiku-4-5, gpt-4o-mini                                    | qwen2.5:7b                                | llama3.1:8b, gemma2:9b                                      |
 
 #### Vision model
 
 Builds the scene bible (1-2 sentence description per shot). Used by `scene` and `cinematic` modes.
 
-What makes a good vision describer: strong OCR (read on-screen text), scene-understanding (count and identify characters, recognize settings), and concise output. Examples:
+What makes a good vision describer: strong OCR (read on-screen text), scene-understanding (count and identify characters, recognize settings), and concise output.
 
 | Tier         | Cloud                                                    | Open-source — Chinese-strong                                           | Open-source — general                                |
 | ------------ | -------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |
@@ -82,53 +90,36 @@ What makes a good vision describer: strong OCR (read on-screen text), scene-unde
 | Mid-tier     | claude-sonnet-4-6, gpt-4o-mini, gemini-2.0-flash         | qwen2.5-vl:7b                                                          | llava:13b, minicpm-v:8b                              |
 | Cheap & fast | claude-haiku-4-5, gemini-1.5-flash                       | qwen2-vl:7b                                                            | llava:7b                                             |
 
-### Recipes
+### Recipes — what to put in each Settings field
 
-Copy-paste configurations for common setups. **Local servers (Ollama, LM Studio, LocalAI) don't require an API key by default — leave it blank.**
+Open the Settings page, scroll to **Translation model** and **Vision model**, and fill the four fields per slot: *Wire protocol*, *Endpoint URL*, *Model*, *API key*. **Local servers (Ollama, LM Studio, LocalAI) don't authenticate by default — leave the API key field blank.**
 
-#### A. Default — Claude for everything (cloud)
+#### A. Default — Anthropic for everything (cloud)
 
-```sh
-BABEL_TRANSLATION_LLM_TYPE=anthropic
-BABEL_TRANSLATION_LLM_MODEL=claude-opus-4-7
-BABEL_TRANSLATION_LLM_API_KEY=sk-ant-...
-
-BABEL_VISION_LLM_TYPE=anthropic
-BABEL_VISION_LLM_MODEL=claude-opus-4-7
-BABEL_VISION_LLM_API_KEY=sk-ant-...    # same key
-```
+| Slot               | Wire protocol | Endpoint           | Model               | API key            |
+| ------------------ | ------------- | ------------------ | ------------------- | ------------------ |
+| Translation model  | `anthropic`   | *(ignored)*        | `claude-opus-4-7`   | your Anthropic key |
+| Vision model       | `anthropic`   | *(ignored)*        | `claude-opus-4-7`   | your Anthropic key |
 
 #### B. OpenAI for everything (cloud)
 
-```sh
-BABEL_TRANSLATION_LLM_TYPE=openai_compat
-BABEL_TRANSLATION_LLM_ENDPOINT=https://api.openai.com/v1
-BABEL_TRANSLATION_LLM_MODEL=gpt-4o-mini
-BABEL_TRANSLATION_LLM_API_KEY=sk-...
-BABEL_TRANSLATION_LLM_SUPPORTS_VISION=true   # gpt-4o-mini sees
+| Slot               | Wire protocol   | Endpoint                     | Model         | API key       |
+| ------------------ | --------------- | ---------------------------- | ------------- | ------------- |
+| Translation model  | `openai_compat` | `https://api.openai.com/v1`  | `gpt-4o-mini` | your key      |
+| Vision model       | `openai_compat` | `https://api.openai.com/v1`  | `gpt-4o`      | your key      |
 
-BABEL_VISION_LLM_TYPE=openai_compat
-BABEL_VISION_LLM_ENDPOINT=https://api.openai.com/v1
-BABEL_VISION_LLM_MODEL=gpt-4o
-BABEL_VISION_LLM_API_KEY=sk-...
-```
+Tick **Supports vision** on the translation slot if you plan to use cinematic mode (gpt-4o-mini handles images).
 
 #### C. Fully local — Ollama (text + vision)
 
-No API keys anywhere. Pull the models first: `ollama pull qwen2.5:72b && ollama pull qwen2.5-vl:72b`.
+No API keys anywhere. Pull the models on the Ollama host first: `ollama pull qwen2.5:72b && ollama pull qwen2.5-vl:72b`.
 
-```sh
-BABEL_TRANSLATION_LLM_TYPE=openai_compat
-BABEL_TRANSLATION_LLM_ENDPOINT=http://ollama:11434/v1
-BABEL_TRANSLATION_LLM_MODEL=qwen2.5:72b
-BABEL_TRANSLATION_LLM_API_KEY=                # blank
-BABEL_TRANSLATION_LLM_SUPPORTS_VISION=false   # qwen2.5 (text) doesn't see — disables cinematic
+| Slot               | Wire protocol   | Endpoint                     | Model              | API key |
+| ------------------ | --------------- | ---------------------------- | ------------------ | ------- |
+| Translation model  | `openai_compat` | `http://ollama:11434/v1`     | `qwen2.5:72b`      | *(blank)* |
+| Vision model       | `openai_compat` | `http://ollama:11434/v1`     | `qwen2.5-vl:72b`   | *(blank)* |
 
-BABEL_VISION_LLM_TYPE=openai_compat
-BABEL_VISION_LLM_ENDPOINT=http://ollama:11434/v1
-BABEL_VISION_LLM_MODEL=qwen2.5-vl:72b
-BABEL_VISION_LLM_API_KEY=                     # blank
-```
+Untick **Supports vision** on the translation slot — `qwen2.5` (text) doesn't see (disables cinematic, scene still works because that uses the vision slot).
 
 If your Ollama isn't on the docker network as `ollama`, use `http://<ollama-host>:11434/v1`.
 
@@ -136,67 +127,43 @@ If your Ollama isn't on the docker network as `ollama`, use `http://<ollama-host
 
 The translation slot's per-cue cost adds up; the vision slot fires once per shot (~200 calls per film) and benefits from a strong specialised model.
 
-```sh
-BABEL_TRANSLATION_LLM_TYPE=openai_compat
-BABEL_TRANSLATION_LLM_ENDPOINT=https://api.openai.com/v1
-BABEL_TRANSLATION_LLM_MODEL=gpt-4o-mini
-BABEL_TRANSLATION_LLM_API_KEY=sk-...
-
-BABEL_VISION_LLM_TYPE=openai_compat
-BABEL_VISION_LLM_ENDPOINT=http://ollama:11434/v1
-BABEL_VISION_LLM_MODEL=qwen2.5-vl:72b
-BABEL_VISION_LLM_API_KEY=                     # blank — Ollama is local
-```
+| Slot               | Wire protocol   | Endpoint                          | Model              | API key   |
+| ------------------ | --------------- | --------------------------------- | ------------------ | --------- |
+| Translation model  | `openai_compat` | `https://api.openai.com/v1`       | `gpt-4o-mini`      | your key  |
+| Vision model       | `openai_compat` | `http://ollama:11434/v1`          | `qwen2.5-vl:72b`   | *(blank)* |
 
 #### E. LM Studio on the host machine (Docker → host network)
 
-```sh
-BABEL_TRANSLATION_LLM_TYPE=openai_compat
-BABEL_TRANSLATION_LLM_ENDPOINT=http://host.docker.internal:1234/v1
-BABEL_TRANSLATION_LLM_MODEL=Qwen2.5-72B-Instruct-MLX
-BABEL_TRANSLATION_LLM_API_KEY=                # blank
-```
+| Slot               | Wire protocol   | Endpoint                                | Model                       | API key   |
+| ------------------ | --------------- | --------------------------------------- | --------------------------- | --------- |
+| Translation model  | `openai_compat` | `http://host.docker.internal:1234/v1`   | `Qwen2.5-72B-Instruct-MLX`  | *(blank)* |
 
 `host.docker.internal` resolves to the host machine on Docker Desktop and via TrueNAS Scale's docker default bridge.
 
 #### F. OpenRouter — one key, many models
 
-```sh
-BABEL_TRANSLATION_LLM_TYPE=openai_compat
-BABEL_TRANSLATION_LLM_ENDPOINT=https://openrouter.ai/api/v1
-BABEL_TRANSLATION_LLM_MODEL=deepseek/deepseek-chat
-BABEL_TRANSLATION_LLM_API_KEY=sk-or-...
-
-BABEL_VISION_LLM_TYPE=openai_compat
-BABEL_VISION_LLM_ENDPOINT=https://openrouter.ai/api/v1
-BABEL_VISION_LLM_MODEL=qwen/qwen2.5-vl-72b-instruct
-BABEL_VISION_LLM_API_KEY=sk-or-...             # same key
-```
+| Slot               | Wire protocol   | Endpoint                          | Model                            | API key       |
+| ------------------ | --------------- | --------------------------------- | -------------------------------- | ------------- |
+| Translation model  | `openai_compat` | `https://openrouter.ai/api/v1`    | `deepseek/deepseek-chat`         | your OR key   |
+| Vision model       | `openai_compat` | `https://openrouter.ai/api/v1`    | `qwen/qwen2.5-vl-72b-instruct`   | your OR key   |
 
 #### G. DeepSeek native + Zhipu (Chinese stack)
 
-```sh
-BABEL_TRANSLATION_LLM_TYPE=openai_compat
-BABEL_TRANSLATION_LLM_ENDPOINT=https://api.deepseek.com/v1
-BABEL_TRANSLATION_LLM_MODEL=deepseek-chat
-BABEL_TRANSLATION_LLM_API_KEY=sk-...
+| Slot               | Wire protocol   | Endpoint                                       | Model            | API key            |
+| ------------------ | --------------- | ---------------------------------------------- | ---------------- | ------------------ |
+| Translation model  | `openai_compat` | `https://api.deepseek.com/v1`                  | `deepseek-chat`  | your DeepSeek key  |
+| Vision model       | `openai_compat` | `https://open.bigmodel.cn/api/paas/v4`         | `glm-4v-plus`    | your Zhipu key     |
 
-BABEL_VISION_LLM_TYPE=openai_compat
-BABEL_VISION_LLM_ENDPOINT=https://open.bigmodel.cn/api/paas/v4
-BABEL_VISION_LLM_MODEL=glm-4v-plus
-BABEL_VISION_LLM_API_KEY=...                   # different provider, different key
-```
-
-### Wire protocol
+### Wire protocol cheat sheet
 
 Each slot independently picks one of two protocols:
 
 | Type            | What it talks to                                                                                                                                                                                          |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `anthropic`     | Native Anthropic SDK. Prompt caching, adaptive thinking, strict JSON-schema enforcement. Used when the model is a Claude variant.                                                                          |
+| `anthropic`     | Native Anthropic SDK. Prompt caching, adaptive thinking, strict JSON-schema enforcement. Pick this only when the model is a Claude variant.                                                                |
 | `openai_compat` | Any Chat-Completions-compatible endpoint: OpenAI proper, Ollama, LocalAI, OpenRouter, Together, Groq, Gemini's OpenAI-compat endpoint, DeepSeek native, Zhipu (GLM), vLLM, llama.cpp's http server, LM Studio. |
 
-Set per-slot `*_llm_endpoint` (only used for `openai_compat`) and `*_llm_api_key`. The two slots are independent — paste the same key value in both if you're using one provider for everything.
+Set per-slot endpoint (only used for `openai_compat`) and API key. The two slots are independent — paste the same key value in both if you're using one provider for everything.
 
 `deepl` auto-detects free vs paid by the API key suffix (`:fx` = free).
 
@@ -204,7 +171,7 @@ Set per-slot `*_llm_endpoint` (only used for `openai_compat`) and `*_llm_api_key
 
 ## STT backends
 
-Two backends, selected via `BABEL_WHISPER_BACKEND`:
+Two backends, selected from Settings → Speech-to-Text → Backend:
 
 | Backend     | When to use                                  | Image                                |
 | ----------- | -------------------------------------------- | ------------------------------------ |
@@ -218,27 +185,24 @@ The `cpu` backend uses `faster-whisper` with INT8 quantization. Slower but no sp
 ## Quick start (any docker host)
 
 ```sh
-# 1. Required env
-cp .env.example .env
-# edit .env: set BABEL_TRANSLATION_LLM_API_KEY, BABEL_VISION_LLM_API_KEY,
-#            EMBY_URL, EMBY_API_KEY, RENDER_GID
-
-# 2. Find your render group GID (for iGPU passthrough)
-getent group render        # e.g. render:x:107:
-
-# 3. Edit docker-compose.yml:
-#    - point the /mnt/media volume at your library
-#    - decide on the runtime user (the container defaults to UID 568 / `app`,
-#      which matches TrueNAS Scale's apps user).
-#      On TrueNAS, the simplest path is to add `user: "<dataset-uid>:<gid>"`
-#      so the container writes as your dataset owner. See the TrueNAS perms
-#      section below for the three options.
-
-# 4. Build and run
+# 1. Clone and bring up the container
+git clone <this-repo> babel-tower-emby
+cd babel-tower-emby
+mkdir -p ./cache && sudo chown -R 568:568 ./cache    # see "TrueNAS dataset perms" below
 docker compose up --build -d
 
-# 5. Open the web UI
+# 2. Open the web UI
 open http://localhost:8765/
+
+# 3. Go to Settings → fill in:
+#    - Emby section: server URL + API key (Emby admin → Advanced → API Keys)
+#    - Translation model: pick wire protocol, endpoint (if openai_compat), model id, API key
+#    - Vision model (optional, only if you want scene/cinematic): same fields
+#    - Defaults: target language, quality tier
+#    Click "Save settings". No restart needed.
+
+# 4. Go to Library → click "Subtitle this" on any item.
+# 5. Watch the dashboard — your first .vtt lands next to the source media.
 ```
 
 The web UI shows:
@@ -246,7 +210,7 @@ The web UI shows:
 - **Library** (`/library`) — browse Emby items, search by name, filter to "missing target-lang sub", queue a per-item job with the current target language + mode.
 - **Settings** (`/settings`) — every editable parameter (STT backend, Whisper model, translation provider, default target language, scene-detection knobs, Emby URL, API keys, etc.) without redeploying.
 
-Settings persist to `/cache/settings.json` and override env defaults.
+Settings persist to `/cache/settings.json` and override env defaults from compose.
 
 ## Triggering a job
 
@@ -273,7 +237,7 @@ curl -X POST 'http://localhost:8765/api/sweep?target_lang=fr&limit=500'
 curl http://localhost:8765/api/emby/items?target_lang=fr
 ```
 
-After the first call for a given file, the result is cached (keyed by file fingerprint + target lang + provider + mode + STT model). Re-runs return instantly.
+After the first call for a given file, the result is cached (keyed by file fingerprint + target lang + provider + mode + STT model + translation/vision LLM model ids). Re-runs return instantly. Switching the configured LLM in the UI invalidates the cache automatically.
 
 ## Auto-trigger on new items (Emby webhook)
 
@@ -289,7 +253,7 @@ Babel Tower's webhook handler is tolerant of payload shape variations across Emb
 
 ## Generating an Emby API key
 
-In Emby admin: **Server Settings → Advanced → API Keys → New API Key**. Paste it into the **Settings** page in the Babel Tower UI (or set `EMBY_API_KEY` in `.env`). Babel Tower uses it to fetch item metadata and trigger refreshes after writing a new `.vtt`.
+In Emby admin: **Server Settings → Advanced → API Keys → New API Key**. Paste it into the **Settings** page in the Babel Tower UI. Babel Tower uses it to fetch item metadata and trigger refreshes after writing a new `.vtt`.
 
 ## Deploying on TrueNAS Scale (24.10+ / Electric Eel and later)
 
@@ -304,11 +268,13 @@ ssh admin@truenas
 cd /mnt/tank/apps        # or wherever you keep apps
 git clone <this-repo> babel-tower-emby
 cd babel-tower-emby
-cp .env.example .env       # edit: API keys, EMBY_URL, EMBY_API_KEY
+mkdir -p ./cache && sudo chown -R 568:568 ./cache
 export RENDER_GID=$(getent group render | cut -d: -f3)
 # edit docker-compose.yml: change `/mnt/media:/mnt/media:ro` to your dataset path
 docker compose up --build -d
 ```
+
+Open `http://<truenas-ip>:8765/` and configure everything from the Settings page — no .env file, no env vars.
 
 ### Path B — pre-built image from GHCR (Custom App UI friendly)
 
@@ -325,9 +291,9 @@ The TrueNAS Apps UI doesn't reliably run `build:` — paste-into-Custom-App work
 
 **On TrueNAS:**
 
-1. Edit `docker-compose.yml`: comment out the `build:` block, uncomment the `image:` line.
-2. Set `GHCR_OWNER` in a `.env` file (copy `.env.example`) or in your shell.
-3. Paste the resulting YAML into **TrueNAS → Apps → Discover Apps → Custom App**.
+1. Edit `docker-compose.yml`: comment out the `build:` block, uncomment the `image:` line. Set `GHCR_OWNER` to your GitHub username/org.
+2. Paste the resulting YAML into **TrueNAS → Apps → Discover Apps → Custom App**.
+3. Once the container is up, open the web UI on `:8765` and finish the setup there — same as Path A.
 
 **Image tags published:**
 
@@ -353,13 +319,7 @@ If your host *isn't* TrueNAS, or your media dataset isn't owned by `apps`, you h
 
 **(a) Override the runtime UID to match your host.**
 
-Find the dataset owner with `stat /mnt/<pool>/media` — note the `Uid` and `Gid`. Then either:
-
-```sh
-PUID=1000 PGID=1000 docker compose up -d
-```
-
-…or set them in `.env`. The compose `user:` line picks them up automatically.
+Find the dataset owner with `stat /mnt/<pool>/media` — note the `Uid` and `Gid`. Then either set `PUID`/`PGID` in your shell before `docker compose up`, or override directly in compose's `user:` line.
 
 **(b) Grant UID 568 access to your dataset.**
 
@@ -371,13 +331,7 @@ mkdir -p ./cache && sudo chown -R 568:568 ./cache
 
 This keeps the container running as the unprivileged `app` user and grants exactly the access it needs.
 
-**(c) Fall back to root.**
-
-```sh
-PUID=0 PGID=0 docker compose up -d
-```
-
-Loses the security benefit but works without any host-side perm changes.
+**(c) Fall back to root.** Set `PUID=0 PGID=0` — loses the security benefit but works without any host-side perm changes.
 
 If perms are wrong, you'll see `PermissionError: [Errno 13]` on the failed job in the dashboard — the rest of the pipeline runs fine, the `.vtt` just doesn't land on disk.
 
@@ -390,9 +344,9 @@ Note: the `group_add: ${RENDER_GID:-107}` in compose adds the host's `render` gr
 - **iGPU passthrough**: if you also use the iGPU for jellyfin/plex/emby transcoding, all containers can share `/dev/dri` — there's no exclusive lock.
 - **Cache volume**: keep `./cache:/cache` on a fast dataset; the OpenVINO IR files are several GB for `large-v3-turbo`.
 
-## Configuration
+## Power-user knobs
 
-Environment variables (prefixed with `BABEL_`):
+Everything below is **optional**. The web UI covers the same surface and is the canonical configuration path. These env vars only matter if you prefer declarative deployment (TrueNAS Custom App YAML, GitOps, etc.) — they set first-boot defaults that the UI then overrides as soon as you click *Save settings*.
 
 | Variable                       | Default              | Notes                                                                    |
 | ------------------------------ | -------------------- | ------------------------------------------------------------------------ |
@@ -418,16 +372,16 @@ Environment variables (prefixed with `BABEL_`):
 | `BABEL_MAX_LINES_PER_CUE`      | `2`                  | Max display lines per cue (overflow merges into the last line, never drops content) |
 | `BABEL_DEFAULT_TARGET_LANG`    | `fr`                 | Default target language for UI / webhook / sweep jobs                   |
 | `BABEL_DEFAULT_SOURCE_LANG_PRIORITY` | `["en","ja","*"]` | Source-language preference for track selection (JSON list)             |
-| `BABEL_DEFAULT_TRANSLATION_PROVIDER` | `claude`     | Default provider for UI / webhook / sweep jobs                           |
+| `BABEL_DEFAULT_TRANSLATION_PROVIDER` | `llm`        | Default provider for UI / webhook / sweep jobs (`llm`/`deepl`/`nllb`)   |
 | `BABEL_DEFAULT_MODE`           | `audio`              | Default quality tier — `audio` / `scene` / `cinematic`                  |
 | `BABEL_SCENE_DETECTION_THRESHOLD` | `0.4`             | ffmpeg scene-detection threshold (0–1, lower = more scenes)              |
 | `BABEL_SCENE_MIN_LENGTH_SECONDS` | `1.5`              | Skip scenes shorter than this many seconds                               |
 | `BABEL_SCENE_MAX_SCENES`       | `500`                | Hard cap on detected scenes per file                                     |
 | `BABEL_SCENE_KEYFRAME_POSITION` | `midpoint`          | Where to grab the scene's keyframe — `start`/`midpoint`/`end`           |
-| `BABEL_SCENE_FRAME_MAX_SIZE`   | `1024`               | Long-edge px for scene keyframes sent to Claude                         |
-| `BABEL_SCENE_BIBLE_BATCH_SIZE` | `10`                 | Scenes per Claude vision call when building the bible                   |
+| `BABEL_SCENE_FRAME_MAX_SIZE`   | `1024`               | Long-edge px for scene keyframes sent to the vision LLM                 |
+| `BABEL_SCENE_BIBLE_BATCH_SIZE` | `10`                 | Scenes per vision LLM call when building the bible                      |
 | `BABEL_CINEMATIC_FRAME_MAX_SIZE` | `768`              | Long-edge px for per-cue frames in cinematic mode                       |
-| `BABEL_CINEMATIC_BATCH_SIZE`   | `10`                 | Cues per Claude call in cinematic mode                                  |
+| `BABEL_CINEMATIC_BATCH_SIZE`   | `10`                 | Cues per LLM call in cinematic mode                                     |
 | `BABEL_DEFAULT_SKIP_IF_TARGET_AUDIO_EXISTS` | `true` | Skip when target-language audio is already in the file                   |
 | `BABEL_EMBY_URL`               | (unset)              | Emby server base URL (e.g. `http://emby:8096`)                           |
 | `BABEL_EMBY_API_KEY`           | (unset)              | Emby admin API key (Server Settings → Advanced → API Keys)              |
@@ -440,7 +394,7 @@ Environment variables (prefixed with `BABEL_`):
 - **OpenVINO first-run is slow.** The IR conversion for `large-v3-turbo` takes 15–30 min on the N305 and produces ~3 GB of IR files. Subsequent runs hit the cache and start in seconds. Watch the container logs the first time.
 - **OpenVINO language detection is limited.** The HF pipeline doesn't surface Whisper's detected language — we trust the ffprobe track tag. If a file's audio is untagged or mistagged, transcription quality may suffer. The `cpu` backend (faster-whisper) does full language detection and is the more reliable fallback for tag-poor libraries.
 - **Path-based contract:** the app reads media files directly from disk. Mount the same path inside the container that Emby sees. No file uploads over HTTP.
-- **Cache hygiene.** The `./cache/` bind-mount holds three things: model weights (faster-whisper / OpenVINO IR / NLLB; can be tens of GB), per-file transcript JSON (small, one per `(file, target, mode, provider)` combo), and the UI-mutated `settings.json`. Nothing currently expires — clear `cache/` to force a clean re-run, but be aware that re-conversion of OpenVINO IR is slow.
+- **Cache hygiene.** The `./cache/` bind-mount holds three things: model weights (faster-whisper / OpenVINO IR / NLLB; can be tens of GB), per-file transcript JSON (small, one per `(file, target, mode, provider, llm-model)` combo), and the UI-mutated `settings.json`. Nothing currently expires — clear `cache/` to force a clean re-run, but be aware that re-conversion of OpenVINO IR is slow.
 
 ## Tests
 
@@ -449,14 +403,14 @@ pip install -e .[dev]
 pytest
 ```
 
-87 tests across 11 files cover the pure-logic surface (language normalization, VTT formatting, track selection, scene mapping, settings store with migration, batching, Emby item parsing) plus FastAPI smoke tests for every route. Heavy externals (ffmpeg, Whisper, LLM APIs) are stubbed — the suite runs in ~1s.
+Tests across pure-logic surface (language normalization, VTT formatting, track selection, scene mapping, settings store with migration, batching, Emby item parsing, cache key invalidation when LLM model changes) plus FastAPI smoke tests for every route. Heavy externals (ffmpeg, Whisper, LLM APIs) are stubbed — the suite runs in ~1s.
 
 ```
 tests/
 ├── conftest.py                test env + per-test isolation
 ├── test_lang.py               ISO 639-1/2 normalization
 ├── test_vtt.py                Timestamp formatting + line wrapping
-├── test_cache.py              Fingerprint, key, JSON-error handling
+├── test_cache.py              Fingerprint, key, JSON-error handling, LLM-model invalidation
 ├── test_config.py             SettingsStore + the legacy → per-function migration
 ├── test_scenes.py             Cue → scene mapping, keyframe positioning
 ├── test_tracks.py             Track-selection policy
@@ -473,7 +427,7 @@ tests/
 ```
 babel-tower-emby/
 ├── .github/workflows/publish.yml   GHCR multi-flavor image publish
-├── .env.example                    Template for env-var-driven config
+├── .env.example                    Optional first-boot defaults (UI overrides everything)
 ├── docker-compose.yml
 ├── Dockerfile                      CPU image (faster-whisper)
 ├── Dockerfile.openvino             Intel iGPU image (OpenVINO + optimum-intel)
@@ -492,10 +446,11 @@ babel-tower-emby/
     ├── emby/
     │   └── client.py               Minimal Emby REST client
     ├── ui/
-    │   └── routes.py               HTML routes (dashboard, settings)
+    │   └── routes.py               HTML routes (dashboard, library, settings)
     ├── templates/
     │   ├── base.html
     │   ├── dashboard.html
+    │   ├── library.html
     │   └── settings.html
     └── pipeline/
         ├── tracks.py               ffprobe + audio track selection

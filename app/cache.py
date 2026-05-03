@@ -32,8 +32,9 @@ def cache_key(
     - `scene_threshold`: relevant for scene/cinematic modes. Different threshold
       → different scene bible → different final VTT.
     - `translation_llm_model`: relevant when provider="llm". Different LLM model
-      → different translation output. Switching from claude-opus-4-7 to
-      gpt-4o or qwen2.5:72b must invalidate the cache.
+      → different translation output. Switching the configured translation
+      model (e.g. claude-opus-4-7 → gpt-4o → qwen2.5:72b) must invalidate the
+      cache.
     - `vision_llm_model`: relevant for scene/cinematic modes (the bible content
       depends on which LLM described the keyframes).
     """

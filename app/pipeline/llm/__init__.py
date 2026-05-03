@@ -2,7 +2,8 @@
 
 Each slot independently picks a backend (anthropic native or OpenAI-compatible)
 so users can mix-and-match — e.g. cheap fast text model for translation +
-strong vision model for scene descriptions, or a single Claude key driving both.
+strong vision model for scene descriptions, or a single API key driving both
+when one provider serves both slots.
 """
 from app.config import settings
 from app.pipeline.llm.base import (

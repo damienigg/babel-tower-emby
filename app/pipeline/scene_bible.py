@@ -1,8 +1,8 @@
-"""Scene-bible generation. Sends keyframes to the configured LLM (Anthropic
-native or any OpenAI-compatible vision-capable endpoint) and fills in
-Scene.description for each scene. Cached on disk per (file fingerprint,
-LLM model id, detection threshold) so re-runs reuse the bible across modes
-and target languages."""
+"""Scene-bible generation. Sends keyframes to the configured Vision LLM (any
+backend the Vision-model slot points at — Anthropic native, OpenAI, Ollama,
+LM Studio, etc.) and fills in Scene.description for each scene. Cached on disk
+per (file fingerprint, vision LLM model id, detection threshold) so re-runs
+reuse the bible across modes and target languages."""
 import hashlib
 import json
 from dataclasses import asdict

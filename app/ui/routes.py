@@ -55,11 +55,16 @@ _FIELD_META: list[dict[str, Any]] = [
     # plan to use cinematic mode.
     {"key": "translation_llm_type", "section": "Translation model",
      "label": "Wire protocol", "type": "select",
-     "options": ["anthropic", "openai_compat"],
-     "help": "`anthropic` ONLY for native Claude (prompt caching, adaptive thinking, strict "
-             "JSON-schema). For EVERYTHING ELSE — including OpenAI, all local servers (Ollama, "
-             "LM Studio, LocalAI, vLLM, llama.cpp), and any other cloud (OpenRouter, Together, "
-             "Groq, DeepSeek, Zhipu, Gemini-compat) — pick `openai_compat` and set the endpoint."},
+     "options": [
+         {"value": "anthropic",
+          "label": "anthropic — native Anthropic SDK (prompt caching, adaptive thinking, JSON schema). Pick only for Claude models."},
+         {"value": "openai_compat",
+          "label": "openai_compat — anything else (OpenAI, Ollama, LM Studio, LocalAI, OpenRouter, DeepSeek, Zhipu, Gemini-compat, vLLM, llama.cpp)"},
+     ],
+     "help": "Pick `anthropic` ONLY when the Model field below is a Claude variant. For "
+             "EVERYTHING ELSE — including OpenAI, all local servers (Ollama, LM Studio, LocalAI, "
+             "vLLM, llama.cpp), and any other cloud (OpenRouter, Together, Groq, DeepSeek, Zhipu, "
+             "Gemini-compat) — pick `openai_compat` and set the endpoint URL."},
     {"key": "translation_llm_model", "section": "Translation model",
      "label": "Model", "type": "text",
      "help": "What makes a good translator: large parameter count, broad multilingual "
@@ -104,9 +109,14 @@ _FIELD_META: list[dict[str, Any]] = [
              "use audio mode. When off, scene/cinematic modes 400 immediately."},
     {"key": "vision_llm_type", "section": "Vision model",
      "label": "Wire protocol", "type": "select",
-     "options": ["anthropic", "openai_compat"],
-     "help": "Same as the Translation model: `anthropic` for native Claude, `openai_compat` "
-             "for everything else (cloud or local)."},
+     "options": [
+         {"value": "anthropic",
+          "label": "anthropic — native Anthropic SDK. Pick only for Claude vision models."},
+         {"value": "openai_compat",
+          "label": "openai_compat — everything else (Ollama, LM Studio, OpenAI, OpenRouter, Zhipu/GLM, ...)"},
+     ],
+     "help": "Same convention as the Translation model: `anthropic` only when the Model field "
+             "below is a Claude variant; `openai_compat` for everything else (cloud or local)."},
     {"key": "vision_llm_model", "section": "Vision model",
      "label": "Model", "type": "text",
      "help": "What makes a good vision describer: strong OCR (read on-screen text), "
@@ -205,10 +215,10 @@ _FIELD_META: list[dict[str, Any]] = [
      "help": "Where in each scene to grab the representative frame. Midpoint is safest."},
     {"key": "scene_frame_max_size", "section": "Scene & Cinematic",
      "label": "Scene keyframe max long edge (px)", "type": "number",
-     "help": "Resolution sent to Claude vision for the scene bible. Smaller = cheaper."},
+     "help": "Resolution sent to the configured Vision LLM for the scene bible. Smaller = cheaper."},
     {"key": "scene_bible_batch_size", "section": "Scene & Cinematic",
      "label": "Scenes per bible-build call", "type": "number",
-     "help": "How many keyframes Claude describes per API call. 10 is a good balance."},
+     "help": "How many keyframes the Vision LLM describes per API call. 10 is a good balance."},
     {"key": "cinematic_frame_max_size", "section": "Scene & Cinematic",
      "label": "Cinematic per-cue frame max long edge (px)", "type": "number",
      "help": "Smaller default than scene keyframes since cinematic ships one frame "

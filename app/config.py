@@ -69,8 +69,8 @@ class _EnvSettings(BaseSettings):
     scene_min_length_seconds: float = 1.5
     scene_max_scenes: int = 500
     scene_keyframe_position: str = "midpoint"      # start | midpoint | end
-    scene_frame_max_size: int = 1024               # long-edge px sent to Claude
-    scene_bible_batch_size: int = 10               # scenes per Claude vision call
+    scene_frame_max_size: int = 1024               # long-edge px sent to the vision LLM
+    scene_bible_batch_size: int = 10               # scenes per vision LLM call
 
     # Cinematic mode (per-cue frame attachment). Smaller frames + smaller batches
     # because each call ships up to N images.
