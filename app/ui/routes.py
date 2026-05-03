@@ -20,76 +20,221 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 
-# Field metadata drives the settings form rendering. Order here = display order.
+# ── Settings UI metadata ─────────────────────────────────────────────────────
+# Field + section metadata drive the settings form rendering. Sections are
+# ordered from "always free / no setup" (top) to "configurable cost" (middle)
+# to "tuning knobs most users never touch" (bottom). Inside each dropdown,
+# options are also ordered simplest/free → most expensive/complex, and each
+# option carries a [BADGE] in its label that calls out the consequence:
+#
+#   [FREE · LOCAL]            no $, runs offline, no account
+#   [FREE TIER · CLOUD]       free up to a quota, paid beyond
+#   [VARIES]                  free or paid depending on user's pick
+#   [+0 LLM calls]            no extra LLM cost over baseline
+#   [+~20 vision calls/film]  scene mode adds ~20 calls per film
+#   [ANY HOST · slow]         no special hardware needed but slow
+#   [INTEL iGPU · 5-10× faster]  needs specific hardware, much faster
+#   [~500 MB · balanced]      disk footprint + speed/quality trade-off
+#
+# Whisper choices have NO $ cost — only compute time × disk space.
+
+_SECTION_META: dict[str, str] = {
+    "Speech-to-Text": (
+        "Whisper transcribes audio to text. ALWAYS FREE — runs 100% locally, "
+        "model is downloaded once. The trade-off here is compute time × quality "
+        "× disk space, NOT money."
+    ),
+    "Defaults": (
+        "Pre-set choices applied when you click 'Subtitle this' or hit "
+        "/api/process without query overrides. THIS is where the cost/complexity "
+        "lever lives — Provider × Mode determines whether each job is free, "
+        "cheap, or expensive."
+    ),
+    "Translation": (
+        "Provider-agnostic translation knobs. Most users leave these at defaults."
+    ),
+    "Translation model": (
+        "Only used when Translation provider = LLM. Skip this section entirely "
+        "if you stay on NLLB or DeepL. Configure cloud (Anthropic / OpenAI / "
+        "OpenRouter / …) or fully local (Ollama / LM Studio / LocalAI / vLLM) "
+        "— Babel doesn't care which."
+    ),
+    "Vision model": (
+        "Only used by scene and cinematic modes (the LLM that describes "
+        "keyframes for the scene bible). Skip this section entirely if you "
+        "stay on audio mode."
+    ),
+    "Scene & Cinematic": (
+        "Tuning knobs for the multimodal modes. NO EFFECT when mode = audio. "
+        "Most users can leave these at defaults."
+    ),
+    "Subtitles": (
+        "WebVTT line-wrap formatting."
+    ),
+    "Emby": (
+        "How Babel Tower reaches your Emby server."
+    ),
+    "API keys": (
+        "Cloud provider keys. Leave everything blank for fully-local setups."
+    ),
+}
+
+
 _FIELD_META: list[dict[str, Any]] = [
-    # STT
+    # ── Speech-to-Text ────────────────────────────────────────────────────────
     {"key": "whisper_backend", "section": "Speech-to-Text",
      "label": "Backend", "type": "select",
      "options": [
          {"value": "cpu",
-          "label": "cpu — faster-whisper (works on any host, slower without GPU)"},
+          "label": "cpu · [ANY HOST · slow] faster-whisper · 20–60 min for a 2h film on small/medium model"},
          {"value": "openvino",
-          "label": "openvino — Intel iGPU via optimum-intel (TrueNAS N305, 5–10× faster)"},
+          "label": "openvino · [INTEL iGPU · 5–10× faster] needs N305/N100/etc. host + openvino-flavored image"},
      ],
      "help": (
          "• cpu uses faster-whisper, runs entirely on the CPU. INT8 quantization keeps it "
-         "tractable but a 2-hour film on a small/medium model takes 20–60 minutes.\n"
-         "• openvino exports Whisper to OpenVINO IR and runs the encoder on Intel iGPU. "
+         "tractable but slow. Works on any host.\n"
+         "• openvino exports Whisper to OpenVINO IR and runs the encoder on the Intel iGPU. "
          "Only works in the openvino-flavored image with /dev/dri exposed (TrueNAS Scale "
-         "with an N305 / N100 / iGPU-equipped Intel host)."
+         "with N305/N100/iGPU-equipped Intel host)."
      )},
     {"key": "whisper_model", "section": "Speech-to-Text", "label": "Whisper model", "type": "select",
-     "options": ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]},
-    {"key": "whisper_compute_type", "section": "Speech-to-Text", "label": "Compute type (CPU backend)",
-     "type": "select", "options": ["int8", "int16", "float16", "float32"]},
-    {"key": "whisper_device", "section": "Speech-to-Text", "label": "Device (CPU backend)",
-     "type": "select", "options": ["cpu", "cuda"],
-     "help": "Where faster-whisper runs. cuda only works if you've added an NVIDIA "
-             "GPU + nvidia-container-toolkit to the host."},
-    {"key": "openvino_device", "section": "Speech-to-Text", "label": "OpenVINO device",
-     "type": "select", "options": ["GPU", "CPU", "AUTO"]},
+     "options": [
+         {"value": "tiny",           "label": "tiny · [~75 MB · fastest · low quality] for quick smoke tests only"},
+         {"value": "base",           "label": "base · [~150 MB · fast · ok quality]"},
+         {"value": "small",          "label": "small · [~500 MB · balanced · good quality] ← default"},
+         {"value": "medium",         "label": "medium · [~1.5 GB · slow · great quality]"},
+         {"value": "large-v3",       "label": "large-v3 · [~3 GB · slowest · best quality]"},
+         {"value": "large-v3-turbo", "label": "large-v3-turbo · [~1.5 GB · fast for size · near-best quality, ~2× faster than large-v3]"},
+     ],
+     "help": "Larger = better but slower and more disk. All sizes are free and local — "
+             "Whisper has no API cost. First-time use of a model triggers a one-off "
+             "download to /cache."},
+    {"key": "whisper_compute_type", "section": "Speech-to-Text",
+     "label": "Compute type (CPU backend only)", "type": "select",
+     "options": [
+         {"value": "int8",    "label": "int8 · [fastest · lowest precision] default — works well in practice"},
+         {"value": "int16",   "label": "int16 · [fast · slightly more precise]"},
+         {"value": "float16", "label": "float16 · [slow · high precision]"},
+         {"value": "float32", "label": "float32 · [slowest · full precision · rarely worth it]"},
+     ],
+     "help": "Quantization for faster-whisper. Lower precision = faster + less RAM, "
+             "with negligible quality loss for subtitle work."},
+    {"key": "whisper_device", "section": "Speech-to-Text",
+     "label": "Device (CPU backend only)", "type": "select",
+     "options": [
+         {"value": "cpu",  "label": "cpu · [universal] works on any host"},
+         {"value": "cuda", "label": "cuda · [NVIDIA GPU] needs nvidia-container-toolkit (rare on TrueNAS)"},
+     ],
+     "help": "Where faster-whisper runs. cuda only matters if you've added an NVIDIA GPU."},
+    {"key": "openvino_device", "section": "Speech-to-Text",
+     "label": "OpenVINO device (OpenVINO backend only)", "type": "select",
+     "options": [
+         {"value": "GPU",  "label": "GPU · [iGPU · fastest] default for openvino backend"},
+         {"value": "CPU",  "label": "CPU · [no special hardware · slower] OpenVINO running on the CPU"},
+         {"value": "AUTO", "label": "AUTO · let OpenVINO pick"},
+     ]},
 
-    # ── Translation model ─────────────────────────────────────────────────
-    # Translates subtitle cues. In cinematic mode this same model also receives
-    # per-cue keyframes — pick a vision-capable one and toggle the flag if you
-    # plan to use cinematic mode.
+    # ── Defaults — the cost lever ─────────────────────────────────────────────
+    {"key": "default_target_lang", "section": "Defaults",
+     "label": "Default target language", "type": "text",
+     "help": "ISO 639-1 code: en, fr, ja, es, de, ja, ja, zh, ar, …"},
+    {"key": "default_source_lang_priority", "section": "Defaults",
+     "label": "Source language priority", "type": "text",
+     "help": "Comma-separated. '*' is a wildcard that matches any language. "
+             "Order = preference: 'en,ja,*' picks English audio first, then Japanese, "
+             "then anything else."},
+    {"key": "default_translation_provider", "section": "Defaults",
+     "label": "Translation provider — pick your cost tier", "type": "select",
+     "options": [
+         {"value": "nllb",
+          "label": "nllb · [FREE · LOCAL] Meta NLLB-200 · 200 langs · openvino image only · ~1.5 GB downloaded on first call"},
+         {"value": "deepl",
+          "label": "deepl · [FREE TIER 500k chars/mo · CLOUD beyond] best on EU/Asian pairs · ~30 langs · text-only"},
+         {"value": "llm",
+          "label": "llm · [VARIES] uses LLM configured below · free if local (Ollama) or paid if cloud · best quality · vision-aware in scene/cinematic"},
+     ],
+     "help": (
+         "Sorted from cheapest to most flexible:\n"
+         "• NLLB — fully free, local, no account, no key. Decent quality on ~30 well-supported "
+         "language pairs. Only works in the openvino-flavored image (the CPU image fails fast "
+         "with an actionable error).\n"
+         "• DeepL — free 500k characters/month (~6 movies), then paid. Excellent quality on "
+         "European and East-Asian pairs. Requires a DeepL API key in the API keys section.\n"
+         "• LLM — uses whatever you configure in the Translation model section. Highest "
+         "quality, supports any language pair. Free if you point at local Ollama / LM Studio. "
+         "Paid per-token if you point at Anthropic / OpenAI / OpenRouter / etc. The only "
+         "provider that benefits from scene/cinematic visual context."
+     )},
+    {"key": "default_mode", "section": "Defaults",
+     "label": "Quality tier — pick your call-volume tier", "type": "select",
+     "options": [
+         {"value": "audio",
+          "label": "audio · [+0 LLM calls beyond translation] whisper only · works with any provider · cheapest · default"},
+         {"value": "scene",
+          "label": "scene · [+~20 vision-LLM calls/film] adds scene bible · improves pronouns/gender · needs Vision model + provider=llm"},
+         {"value": "cinematic",
+          "label": "cinematic · [+1 LLM call per cue with image] adds per-cue frame to translation · most expensive · needs vision-capable Translation model"},
+     ],
+     "help": (
+         "Higher tier = more visual context for the translator = better quality on tricky "
+         "scenes, but more LLM calls.\n"
+         "• audio uses Whisper only. No vision. Works with any provider (NLLB/DeepL/LLM).\n"
+         "• scene runs ffmpeg scene-detection, sends one keyframe per shot to the Vision LLM "
+         "for a 1-2 sentence description, then feeds the resulting bible to the translator as "
+         "cached system context. Requires Vision model section configured AND provider=llm.\n"
+         "• cinematic does what scene does AND additionally attaches one keyframe per cue to "
+         "the translation call so the translator literally sees each moment. Requires the "
+         "Translation model to be vision-capable AND provider=llm."
+     )},
+    {"key": "default_skip_if_target_audio_exists", "section": "Defaults",
+     "label": "Skip when target-language audio is already present", "type": "checkbox",
+     "help": "If the file already has audio in the target language, do nothing. Saves "
+             "compute on items where the user can just switch audio track in their player."},
+
+    # ── Translation (provider-agnostic params) ────────────────────────────────
+    {"key": "nllb_model", "section": "Translation",
+     "label": "NLLB HF model id (only used when provider=nllb)", "type": "text",
+     "help": "facebook/nllb-200-distilled-600M (default, ~1.5 GB) is the sweet spot. "
+             "Larger variants exist (1.3B, 3.3B) — better quality, slower, more RAM."},
+    {"key": "translation_batch_size", "section": "Translation",
+     "label": "Cues per LLM batch (text-only mode, only used when provider=llm)", "type": "number",
+     "help": "Higher = fewer round-trips, lower = more granular failures and retries. "
+             "30 is a good balance."},
+
+    # ── Translation model (only used when provider=llm) ───────────────────────
     {"key": "translation_llm_type", "section": "Translation model",
      "label": "Wire protocol", "type": "select",
      "options": [
-         {"value": "anthropic",
-          "label": "anthropic — native Anthropic SDK (prompt caching, adaptive thinking, JSON schema). Pick only for Claude models."},
          {"value": "openai_compat",
-          "label": "openai_compat — anything else (OpenAI, Ollama, LM Studio, LocalAI, OpenRouter, DeepSeek, Zhipu, Gemini-compat, vLLM, llama.cpp)"},
+          "label": "openai_compat · [universal] OpenAI · Ollama · LM Studio · LocalAI · OpenRouter · Together · Groq · DeepSeek · Zhipu · Gemini-compat · vLLM · llama.cpp"},
+         {"value": "anthropic",
+          "label": "anthropic · [Claude only] adds prompt caching, adaptive thinking, strict JSON-schema enforcement"},
      ],
-     "help": "Pick `anthropic` ONLY when the Model field below is a Claude variant. For "
-             "EVERYTHING ELSE — including OpenAI, all local servers (Ollama, LM Studio, LocalAI, "
-             "vLLM, llama.cpp), and any other cloud (OpenRouter, Together, Groq, DeepSeek, Zhipu, "
-             "Gemini-compat) — pick `openai_compat` and set the endpoint URL."},
+     "help": "Pick `openai_compat` for everything except Claude — it's the universal Chat-"
+             "Completions protocol and covers all local servers + most cloud providers. Pick "
+             "`anthropic` ONLY when the Model field is a Claude variant (you get extra "
+             "Anthropic-only features that way)."},
     {"key": "translation_llm_model", "section": "Translation model",
      "label": "Model", "type": "text",
      "help": "What makes a good translator: large parameter count, broad multilingual "
-             "training, strong instruction-following. Cloud frontier: claude-opus-4-7, "
-             "claude-sonnet-4-6, gpt-4o, gpt-4o-mini, gemini-1.5-pro, gemini-2.0-flash-exp, "
-             "mistral-large-latest. Open-source — chinese-strong: qwen2.5:72b, "
-             "qwen2.5:32b, deepseek-v3, deepseek-chat, glm-4-flash. Open-source — "
-             "general: llama3.1:70b, llama3.3:70b, mistral-large, command-r-plus. "
-             "Smaller-but-capable: claude-haiku-4-5, gpt-4o-mini, qwen2.5:14b, "
-             "llama3.1:8b, gemma2:27b."},
+             "training, strong instruction-following.\n"
+             "• Frontier cloud (paid): claude-opus-4-7, gpt-4o, gemini-1.5-pro, mistral-large.\n"
+             "• Frontier open-source (free if local): qwen2.5:72b, deepseek-v3, llama3.1:70b, "
+             "glm-4-flash, command-r-plus.\n"
+             "• Cheap & fast: claude-haiku-4-5, gpt-4o-mini, qwen2.5:14b, llama3.1:8b, gemma2:9b."},
     {"key": "translation_llm_endpoint", "section": "Translation model",
-     "label": "Endpoint URL (when wire protocol = openai_compat)", "type": "text",
-     "help": "Ignored when wire protocol = anthropic. Examples — CLOUD: "
-             "https://api.openai.com/v1 (OpenAI) · "
-             "https://openrouter.ai/api/v1 (OpenRouter — many models behind one URL) · "
-             "https://api.deepseek.com/v1 (DeepSeek native) · "
-             "https://open.bigmodel.cn/api/paas/v4 (Zhipu / GLM) · "
-             "https://generativelanguage.googleapis.com/v1beta/openai (Gemini compat). "
-             "LOCAL (no API key needed): http://ollama:11434/v1 · "
-             "http://lmstudio:1234/v1 · http://localai:8080/v1 · "
-             "http://host.docker.internal:1234/v1 (LM Studio on the host machine when Babel runs in Docker)."},
+     "label": "Endpoint URL (only when wire protocol = openai_compat)", "type": "text",
+     "help": "Ignored when wire protocol = anthropic.\n"
+             "• Cloud: https://api.openai.com/v1 · https://openrouter.ai/api/v1 · "
+             "https://api.deepseek.com/v1 · https://open.bigmodel.cn/api/paas/v4 (Zhipu) · "
+             "https://generativelanguage.googleapis.com/v1beta/openai (Gemini-compat).\n"
+             "• Local (no API key needed): http://ollama:11434/v1 · http://lmstudio:1234/v1 · "
+             "http://localai:8080/v1 · http://host.docker.internal:1234/v1 (LM Studio on the "
+             "host machine when Babel runs in Docker)."},
     {"key": "translation_llm_api_key", "section": "Translation model",
-     "label": "API key (optional for local servers)", "type": "password",
+     "label": "API key (LEAVE BLANK for local servers)", "type": "password",
      "help": "REQUIRED for cloud providers (Anthropic, OpenAI, OpenRouter, Together, Groq, "
-             "DeepSeek, Zhipu, Gemini, ...). LEAVE BLANK for local servers (Ollama, LM Studio, "
+             "DeepSeek, Zhipu, Gemini, …). LEAVE BLANK for local servers (Ollama, LM Studio, "
              "LocalAI) that don't authenticate by default — Babel substitutes a placeholder so "
              "the OpenAI SDK is happy. Set a value only if you've explicitly enabled auth on "
              "your local server (e.g. vLLM with --api-key)."},
@@ -98,157 +243,119 @@ _FIELD_META: list[dict[str, Any]] = [
      "help": "Whether this model accepts image inputs. Cinematic mode attaches one frame "
              "per cue to translation calls — needs a multimodal model (claude-opus-4-7, "
              "gpt-4o, gemini-1.5-pro, qwen2.5-vl, llava, etc.). Anthropic models always "
-             "support vision (flag is ignored when type=anthropic)."},
+             "support vision (this flag is ignored when wire protocol = anthropic)."},
 
-    # ── Vision model ──────────────────────────────────────────────────────
-    # Builds the scene bible: 1-2 sentence description per shot. Used by scene
-    # and cinematic modes. By definition has to be vision-capable.
+    # ── Vision model (only used by scene + cinematic modes) ───────────────────
     {"key": "vision_llm_enabled", "section": "Vision model",
      "label": "Enable scene/cinematic modes", "type": "checkbox",
      "help": "Master switch. Toggle off if you don't have a vision-capable LLM and only "
-             "use audio mode. When off, scene/cinematic modes 400 immediately."},
+             "use audio mode. When off, scene/cinematic modes 400 immediately at submission."},
     {"key": "vision_llm_type", "section": "Vision model",
      "label": "Wire protocol", "type": "select",
      "options": [
-         {"value": "anthropic",
-          "label": "anthropic — native Anthropic SDK. Pick only for Claude vision models."},
          {"value": "openai_compat",
-          "label": "openai_compat — everything else (Ollama, LM Studio, OpenAI, OpenRouter, Zhipu/GLM, ...)"},
+          "label": "openai_compat · [universal] Ollama · LM Studio · OpenAI · OpenRouter · Zhipu/GLM · …"},
+         {"value": "anthropic",
+          "label": "anthropic · [Claude only] adds prompt caching, JSON schema"},
      ],
-     "help": "Same convention as the Translation model: `anthropic` only when the Model field "
-             "below is a Claude variant; `openai_compat` for everything else (cloud or local)."},
+     "help": "Same convention as the Translation model: pick `openai_compat` for everything "
+             "except Claude."},
     {"key": "vision_llm_model", "section": "Vision model",
      "label": "Model", "type": "text",
      "help": "What makes a good vision describer: strong OCR (read on-screen text), "
              "scene-understanding (count/identify characters, recognize settings), and "
-             "concise output. Cloud frontier: claude-opus-4-7, claude-sonnet-4-6, gpt-4o, "
-             "gemini-1.5-pro, gemini-2.0-flash-exp. Open-source — chinese-strong: "
-             "qwen2.5-vl:72b, qwen2.5-vl:7b (Alibaba; among the strongest open-source "
-             "vision models), glm-4v-plus, internvl2:26b (Shanghai AI Lab). "
-             "Open-source — general: llava:34b, llava:13b, llava-1.6:34b, "
-             "minicpm-v:8b, pixtral-12b. Cheap-and-fast: claude-haiku-4-5, gpt-4o-mini, "
-             "gemini-1.5-flash, qwen2-vl:7b."},
+             "concise output.\n"
+             "• Frontier cloud: claude-opus-4-7, gpt-4o, gemini-1.5-pro.\n"
+             "• Frontier open-source: qwen2.5-vl:72b (Alibaba — among the strongest open vision "
+             "models), glm-4v-plus, internvl2:26b, llava-1.6:34b, pixtral-12b.\n"
+             "• Cheap & fast: claude-haiku-4-5, gpt-4o-mini, gemini-1.5-flash, qwen2-vl:7b."},
     {"key": "vision_llm_endpoint", "section": "Vision model",
-     "label": "Endpoint URL (when wire protocol = openai_compat)", "type": "text",
-     "help": "Same endpoint conventions as the translation model. The two slots are "
-             "independent — common pattern: OpenAI for translation, Ollama running "
-             "qwen2.5-vl locally for vision."},
+     "label": "Endpoint URL (only when wire protocol = openai_compat)", "type": "text",
+     "help": "Same endpoint conventions as the Translation model. The two slots are "
+             "INDEPENDENT — common pattern: cloud LLM for translation + local Ollama running "
+             "qwen2.5-vl for vision (vision is the slot that benefits most from a strong "
+             "specialized model)."},
     {"key": "vision_llm_api_key", "section": "Vision model",
-     "label": "API key (optional for local servers)", "type": "password",
-     "help": "REQUIRED for cloud providers, LEAVE BLANK for default local Ollama / LM Studio / "
-             "LocalAI installs. Independent from the translation slot — paste the same value in "
-             "both if you're using one provider for everything."},
+     "label": "API key (LEAVE BLANK for local servers)", "type": "password",
+     "help": "REQUIRED for cloud providers. LEAVE BLANK for default local Ollama / LM Studio / "
+             "LocalAI. Independent from the Translation slot — paste the same value in both "
+             "if you're using one provider for everything."},
 
-    # Translation
-    {"key": "nllb_model", "section": "Translation", "label": "NLLB HF model id", "type": "text"},
-    {"key": "translation_batch_size", "section": "Translation",
-     "label": "Cues per LLM batch (text-only)", "type": "number"},
-
-    # Subtitle formatting
-    {"key": "max_line_chars", "section": "Subtitles", "label": "Max chars per line", "type": "number"},
-    {"key": "max_lines_per_cue", "section": "Subtitles", "label": "Max lines per cue", "type": "number"},
-
-    # Defaults applied to UI- and webhook-triggered jobs
-    {"key": "default_target_lang", "section": "Defaults", "label": "Default target language",
-     "type": "text", "help": "ISO 639-1 (en, fr, ja, ...)"},
-    {"key": "default_source_lang_priority", "section": "Defaults",
-     "label": "Source language priority", "type": "text",
-     "help": "comma-separated; '*' is a wildcard that matches any language"},
-    {"key": "default_translation_provider", "section": "Defaults",
-     "label": "Who translates the cues?", "type": "select",
-     "options": [
-         {"value": "llm",
-          "label": "LLM — use the Translation model configured above (recommended)"},
-         {"value": "deepl",
-          "label": "DeepL — cloud translation API (set DeepL API key below)"},
-         {"value": "nllb",
-          "label": "NLLB-200 — local 200-language model (OpenVINO image only)"},
-     ],
-     "help": (
-         "Each option requires different setup:\n"
-         "• LLM uses whatever you configured in the Translation model section above "
-         "(Claude / GPT / Llama / Qwen / DeepSeek / Gemini / ...). Best quality. Vision-aware "
-         "in scene/cinematic modes.\n"
-         "• DeepL is a dedicated translation API. Free tier: 500k characters/month "
-         "(~6 movies). Excellent for European languages. Text-only — never sees the picture. "
-         "Requires the DeepL API key in the API keys section below.\n"
-         "• NLLB-200 is Meta's 200-language model. Runs locally on the Intel iGPU via "
-         "OpenVINO. Free, offline. Lower quality than the cloud options on common pairs but "
-         "covers the long tail. Only available in the openvino-flavored Docker image."
-     )},
-    {"key": "default_mode", "section": "Defaults",
-     "label": "Quality tier (and what visual context to add)", "type": "select",
-     "options": [
-         {"value": "audio",
-          "label": "audio — speech only · fastest · cheapest"},
-         {"value": "scene",
-          "label": "scene — + LLM-vision scene bible (pronoun & gender disambiguation)"},
-         {"value": "cinematic",
-          "label": "cinematic — scene + per-cue keyframe attached to translation"},
-     ],
-     "help": (
-         "• audio uses Whisper transcription only — no visual context. Always works.\n"
-         "• scene runs ffmpeg scene-detection on the video, sends one keyframe per shot to "
-         "the Vision model for a 1-2 sentence description, then feeds the resulting bible to "
-         "the translator as cached system context. Requires the Vision model section enabled.\n"
-         "• cinematic does what scene does AND additionally attaches one keyframe per cue to "
-         "the translation call so the translator literally sees the moment for each line. "
-         "Requires the Translation model to be vision-capable."
-     )},
-    {"key": "default_skip_if_target_audio_exists", "section": "Defaults",
-     "label": "Skip when target-language audio is already present", "type": "checkbox"},
-
-    # Scene detection (used by scene + cinematic modes)
+    # ── Scene & Cinematic tuning (no effect when mode=audio) ──────────────────
     {"key": "scene_detection_threshold", "section": "Scene & Cinematic",
      "label": "Scene-detection threshold", "type": "number",
      "help": "ffmpeg's scene-change threshold, 0.0–1.0. Lower → more scenes detected. "
-             "0.3–0.5 typical for film/TV; lower for fast-cut content."},
+             "0.3–0.5 is typical for film/TV; lower for fast-cut content."},
     {"key": "scene_min_length_seconds", "section": "Scene & Cinematic",
-     "label": "Min scene length (s)", "type": "number",
+     "label": "Min scene length (seconds)", "type": "number",
      "help": "Skip scenes shorter than this — avoids micro-shots polluting the bible."},
     {"key": "scene_max_scenes", "section": "Scene & Cinematic",
-     "label": "Max scenes per file", "type": "number",
-     "help": "Hard cap. ~200 typical for a 2h film. Higher costs more on first build."},
+     "label": "Max scenes per file (hard cap)", "type": "number",
+     "help": "~200 typical for a 2-hour film. Higher = more vision-LLM calls = more $/wait."},
     {"key": "scene_keyframe_position", "section": "Scene & Cinematic",
      "label": "Keyframe sample position", "type": "select",
-     "options": ["start", "midpoint", "end"],
-     "help": "Where in each scene to grab the representative frame. Midpoint is safest."},
+     "options": [
+         {"value": "midpoint", "label": "midpoint · [safest] center of the shot · default"},
+         {"value": "start",    "label": "start · first frame of the shot"},
+         {"value": "end",      "label": "end · last frame of the shot"},
+     ],
+     "help": "Where in each scene to grab the representative frame for the vision LLM."},
     {"key": "scene_frame_max_size", "section": "Scene & Cinematic",
      "label": "Scene keyframe max long edge (px)", "type": "number",
-     "help": "Resolution sent to the configured Vision LLM for the scene bible. Smaller = cheaper."},
+     "help": "Resolution sent to the Vision LLM for the scene bible. Smaller = cheaper "
+             "+ faster, but loses fine details (small on-screen text gets unreadable below ~600px)."},
     {"key": "scene_bible_batch_size", "section": "Scene & Cinematic",
      "label": "Scenes per bible-build call", "type": "number",
      "help": "How many keyframes the Vision LLM describes per API call. 10 is a good balance."},
     {"key": "cinematic_frame_max_size", "section": "Scene & Cinematic",
      "label": "Cinematic per-cue frame max long edge (px)", "type": "number",
      "help": "Smaller default than scene keyframes since cinematic ships one frame "
-             "per cue (potentially 1000+ images per film). Smaller saves a lot."},
+             "per cue (potentially 1000+ images per film). Shrinking saves a lot."},
     {"key": "cinematic_batch_size", "section": "Scene & Cinematic",
      "label": "Cues per cinematic call", "type": "number",
-     "help": "Smaller than the text-only batch (default 30) because each call "
-             "ships one image per cue. 10 keeps each call manageable."},
+     "help": "Smaller than the text-only batch (default 30) because each call ships "
+             "one image per cue. 10 keeps each call manageable."},
 
-    # Emby
-    {"key": "emby_url", "section": "Emby", "label": "Emby server URL", "type": "text",
-     "help": "e.g. http://emby:8096"},
-    {"key": "emby_api_key", "section": "Emby", "label": "Emby API key", "type": "password"},
-    {"key": "webhook_secret", "section": "Emby", "label": "Webhook shared secret",
-     "type": "password",
-     "help": "Optional. If set, /webhook/emby requires header X-Babel-Token: <this value>."},
+    # ── Subtitle formatting ───────────────────────────────────────────────────
+    {"key": "max_line_chars", "section": "Subtitles",
+     "label": "Max chars per line", "type": "number",
+     "help": "Standard subtitling guidelines suggest 40–42 for comfortable reading."},
+    {"key": "max_lines_per_cue", "section": "Subtitles",
+     "label": "Max lines per cue", "type": "number",
+     "help": "Overflow merges into the last line — never drops content."},
 
-    # API keys
+    # ── Emby integration ──────────────────────────────────────────────────────
+    {"key": "emby_url", "section": "Emby",
+     "label": "Emby server URL", "type": "text",
+     "help": "Where Babel reaches Emby. e.g. http://emby:8096 (docker-compose service name) "
+             "or http://192.168.1.10:8096 (LAN IP)."},
+    {"key": "emby_api_key", "section": "Emby",
+     "label": "Emby API key", "type": "password",
+     "help": "Generate in Emby admin → Server Settings → Advanced → API Keys."},
+    {"key": "webhook_secret", "section": "Emby",
+     "label": "Webhook shared secret (optional)", "type": "password",
+     "help": "If set, /webhook/emby requires header X-Babel-Token: <this value>. Configure "
+             "the matching header in Emby's webhook notification."},
+
+    # ── API keys ──────────────────────────────────────────────────────────────
     {"key": "deepl_api_key", "section": "API keys",
      "label": "DeepL API key", "type": "password",
-     "help": "Required when default_translation_provider=deepl. Free-tier keys end in ':fx' (auto-detected)."},
+     "help": "Required when Translation provider = DeepL. Free-tier keys end in ':fx' "
+             "(auto-detected — Babel routes to api-free.deepl.com vs api.deepl.com)."},
 ]
 
 
-def _section_groups() -> list[tuple[str, list[dict]]]:
+def _section_groups() -> list[tuple[str, str, list[dict]]]:
+    """Group fields by section. Returns (name, description, fields) tuples in
+    display order."""
     seen: list[str] = []
     for f in _FIELD_META:
         if f["section"] not in seen:
             seen.append(f["section"])
-    return [(s, [f for f in _FIELD_META if f["section"] == s]) for s in seen]
+    return [
+        (s, _SECTION_META.get(s, ""), [f for f in _FIELD_META if f["section"] == s])
+        for s in seen
+    ]
 
 
 def _coerce(key: str, raw: str) -> Any:

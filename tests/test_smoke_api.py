@@ -24,6 +24,25 @@ def test_health_returns_ok(client):
     assert r.json() == {"status": "ok"}
 
 
+def test_settings_page_renders_with_cost_ladder(client):
+    """The HTML settings page must render without errors and surface the
+    cost-ladder hero + per-section descriptions that guide users from the
+    free default to more expensive tiers."""
+    r = client.get("/settings")
+    assert r.status_code == 200
+    body = r.text
+    # Hero block with the cost ladder
+    assert "Cost ladder" in body
+    assert "NLLB" in body and "DeepL" in body and "LLM" in body
+    # Per-section descriptions
+    assert "ALWAYS FREE" in body                           # STT section
+    assert "cost/complexity lever" in body                 # Defaults section
+    # Cost-aware option labels rendered in the dropdowns
+    assert "[FREE · LOCAL]" in body                        # nllb option
+    assert "[FREE TIER 500k chars/mo · CLOUD beyond]" in body   # deepl option
+    assert "[+0 LLM calls beyond translation]" in body     # audio mode option
+
+
 def test_settings_get_masks_sensitive(client):
     r = client.get("/api/settings")
     assert r.status_code == 200

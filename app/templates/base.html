@@ -59,8 +59,30 @@
       margin-bottom: 1.5rem;
     }
     section.settings-section > header h3 {
-      margin: 0 0 0.5rem; font-size: 1.1em; color: var(--pico-primary);
+      margin: 0 0 0.25rem; font-size: 1.1em; color: var(--pico-primary);
     }
+    section.settings-section > header .section-help {
+      margin: 0 0 0.85rem; font-size: 0.85em;
+      color: var(--pico-muted-color); font-style: italic;
+      line-height: 1.45; max-width: 70ch;
+    }
+
+    /* Cost-ladder hero on the settings page */
+    .hero-cost-ladder {
+      background: linear-gradient(135deg, var(--bt-info-bg), var(--bt-active-bg));
+      color: var(--bt-info-fg);
+      border: none;
+      padding: 1rem 1.25rem;
+      border-radius: 0.5rem;
+      margin-bottom: 1.75rem;
+    }
+    .hero-cost-ladder header { margin-bottom: 0.5rem; padding: 0; border: none; background: none; }
+    .hero-cost-ladder header strong { font-size: 1.05em; color: var(--bt-active-fg); }
+    .hero-cost-ladder p { margin: 0.4rem 0; }
+    .hero-cost-ladder ol { margin: 0.5rem 0 0.6rem; padding-left: 1.5rem; }
+    .hero-cost-ladder li { margin-bottom: 0.2rem; line-height: 1.5; }
+    .hero-cost-ladder em { color: var(--bt-active-fg); font-style: normal; }
+    .hero-cost-ladder small { color: var(--bt-info-fg); opacity: 0.85; }
 
     /* Hidden state for conditional fields */
     .field-hidden { display: none; }

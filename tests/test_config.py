@@ -22,6 +22,21 @@ def test_proxy_falls_back_to_env_default(tmp_path):
     assert s.whisper_model == "small"
 
 
+def test_default_translation_provider_is_simplest_free_option(tmp_path):
+    """The out-of-the-box default must be NLLB: free, local, no account, no
+    API key. Picking any other default would force the user to do setup
+    before their first job can run, breaking the 'simplest as default' rule."""
+    s = _store(tmp_path)
+    assert s.default_translation_provider == "nllb"
+
+
+def test_default_mode_is_cheapest_tier(tmp_path):
+    """Default mode is `audio` — the only tier that doesn't trigger any
+    LLM calls beyond translation, regardless of which provider is chosen."""
+    s = _store(tmp_path)
+    assert s.default_mode == "audio"
+
+
 def test_override_takes_precedence_over_env(tmp_path):
     s = _store(tmp_path)
     s.update({"whisper_model": "medium"})

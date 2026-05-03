@@ -46,7 +46,7 @@ The mode controls how much visual context the translator gets. The tier is encod
 | `scene`     | Detect shots with ffmpeg's scene filter → extract one keyframe per shot → the configured **Vision LLM** generates a 1–2 sentence "scene bible" → translator gets it as cached system context plus a per-cue scene tag. Improves pronoun/gender/referent disambiguation. | $$       | + scene detection (5–15 min for a 2h film) + ~20 vision calls |
 | `cinematic` | Everything `scene` does **plus** one keyframe per cue attached as an image to translation calls. The translator literally sees what's on screen for each line.                                                                                       | $$$      | + per-cue frame extraction (slow, sequential) + many more API calls |
 
-Default is `audio`. Change via Settings → Defaults → Quality tier, or per-request via the API body's `mode` field.
+**Defaults are the cheapest tier**: provider = `nllb` (free, fully local), mode = `audio` (no LLM calls beyond translation). The Settings UI is laid out as a cost ladder — climb from free/local at the top to configurable cost at the bottom. Change via Settings → Defaults, or per-request via the API body's `mode` / `translation_provider` fields.
 
 **`scene` and `cinematic` require translation provider = `llm`** with a vision-capable model — they read the keyframes through your Vision LLM and (in cinematic) attach frames to your Translation LLM. The processor refuses with a 400 if you combine them with DeepL or NLLB (text-only providers) or with a translation model you've flagged non-vision.
 
@@ -372,7 +372,7 @@ Everything below is **optional**. The web UI covers the same surface and is the 
 | `BABEL_MAX_LINES_PER_CUE`      | `2`                  | Max display lines per cue (overflow merges into the last line, never drops content) |
 | `BABEL_DEFAULT_TARGET_LANG`    | `fr`                 | Default target language for UI / webhook / sweep jobs                   |
 | `BABEL_DEFAULT_SOURCE_LANG_PRIORITY` | `["en","ja","*"]` | Source-language preference for track selection (JSON list)             |
-| `BABEL_DEFAULT_TRANSLATION_PROVIDER` | `llm`        | Default provider for UI / webhook / sweep jobs (`llm`/`deepl`/`nllb`)   |
+| `BABEL_DEFAULT_TRANSLATION_PROVIDER` | `nllb`       | Default provider for UI / webhook / sweep jobs (`nllb`/`deepl`/`llm`). Default `nllb` is free + local — fails fast on the CPU image with an actionable error. |
 | `BABEL_DEFAULT_MODE`           | `audio`              | Default quality tier — `audio` / `scene` / `cinematic`                  |
 | `BABEL_SCENE_DETECTION_THRESHOLD` | `0.4`             | ffmpeg scene-detection threshold (0–1, lower = more scenes)              |
 | `BABEL_SCENE_MIN_LENGTH_SECONDS` | `1.5`              | Skip scenes shorter than this many seconds                               |

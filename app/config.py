@@ -54,7 +54,12 @@ class _EnvSettings(BaseSettings):
     # Defaults applied to webhook-triggered and UI-triggered jobs
     default_target_lang: str = "fr"
     default_source_lang_priority: list[str] = ["en", "ja", "*"]
-    default_translation_provider: str = "llm"
+    # Default provider is `nllb`: free, fully local, no account, no API key.
+    # On the openvino image it downloads the ~1.5 GB Meta NLLB-200 model on
+    # first call and runs offline thereafter. On the CPU image NLLB fails fast
+    # with an actionable error directing the user to switch to deepl or llm.
+    # Users who want best quality flip this to `llm` in the Settings UI.
+    default_translation_provider: str = "nllb"
     default_skip_if_target_audio_exists: bool = True
     # Quality tier: audio (default) | scene | cinematic.
     # `scene` adds an LLM-vision scene bible (one short description per shot)
