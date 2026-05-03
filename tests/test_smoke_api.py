@@ -258,3 +258,55 @@ def test_partials_jobs_renders(client):
     assert r.status_code == 200
     # The partial root has the auto-refresh attributes
     assert 'hx-get="/partials/jobs"' in r.text
+
+
+def test_dashboard_renders_when_running_jobs_exist(client, monkeypatch):
+    """Regression: an earlier commit referenced JobView-only fields
+    (snapshot_at, elapsed_seconds) directly in the _jobs_table.html
+    partial. Since the partial is fed bare Job dataclass instances —
+    not JobView — that crashed the dashboard with UndefinedError as
+    soon as ANY job existed. Lock down: the dashboard must render
+    cleanly with both running and finished jobs in the registry."""
+    import time as _time
+    from app import jobs as jobs_mod
+    running = jobs_mod.Job(
+        id="r1", item_id="i1", item_name="Running movie",
+        target_lang="fr", provider="nllb", mode="audio",
+    )
+    running.status = "running"
+    running.started_at = _time.time() - 30.0
+    running.progress_pct = 42.5
+    running.progress_stage = "transcribing"
+
+    done = jobs_mod.Job(
+        id="d1", item_id="i2", item_name="Finished movie",
+        target_lang="fr", provider="nllb", mode="audio",
+    )
+    done.status = "succeeded"
+    done.started_at = _time.time() - 600.0
+    done.finished_at = _time.time() - 60.0
+    done.progress_pct = 100.0
+
+    canceled = jobs_mod.Job(
+        id="c1", item_id="i3", item_name="Aborted movie",
+        target_lang="fr", provider="nllb", mode="audio",
+    )
+    canceled.status = "canceled"
+    canceled.started_at = _time.time() - 200.0
+    canceled.finished_at = _time.time() - 100.0
+
+    monkeypatch.setattr(jobs_mod, "_jobs", {
+        running.id: running, done.id: done, canceled.id: canceled,
+    })
+
+    # Both the dashboard and the partial it includes must render without
+    # raising — exercising the elapsed-time computation path for each
+    # status (running, succeeded, canceled).
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Running movie" in r.text
+    assert "Finished movie" in r.text
+    assert "Aborted movie" in r.text
+
+    p = client.get("/partials/jobs")
+    assert p.status_code == 200

@@ -49,6 +49,15 @@ def _format_duration(seconds: float | int | None) -> str:
 
 templates.env.filters["duration"] = _format_duration
 
+# Expose the server's current wall-clock time to every template render so
+# _jobs_table.html can compute elapsed_seconds + snapshot_at directly from
+# raw Job timestamps (started_at / finished_at). Without this, the template
+# would have to receive pre-augmented dicts — which means routing every
+# Job through a serialization step before render. now() is a function so
+# each template render gets a fresh value (Jinja calls it per use).
+import time as _time
+templates.env.globals["now"] = _time.time
+
 
 # ── Settings UI metadata ─────────────────────────────────────────────────────
 # Field + section metadata drive the settings form rendering. Sections are

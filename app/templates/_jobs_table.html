@@ -28,27 +28,38 @@
           <td><span class="status-pill {{ j.status }}">{{ j.status }}</span></td>
           <td>{{ j.item_name or j.item_id }}</td>
           <td class="col-progress">
+            {# Compute elapsed / snapshot directly from Job's raw timestamps.
+               The template renders Job dataclass instances (not JobView), so
+               we don't have the pre-computed elapsed_seconds field — derive
+               it inline from started_at/finished_at and the server's current
+               time (`now()` is registered as a Jinja global). #}
             {% if j.status in ('running', 'canceling') %}
+              {% set _elapsed = (now() - j.started_at) if j.started_at else 0 %}
+              {% set _snapshot_ms = (now() * 1000)|round|int %}
               <div class="progress-wrap" title="{{ j.progress_stage }}">
                 <div class="progress-bar" style="width: {{ j.progress_pct|round(1) }}%"></div>
                 <span class="progress-label">{{ j.progress_pct|round(0) }}% · {{ j.progress_stage }}</span>
               </div>
-              {# Elapsed timer ticks +1s/sec on the client between HTMX swaps;
-                 the data-* attrs let the global ticker re-anchor on each
-                 server snapshot so we don't drift. #}
+              {# data-* attrs feed the global ticker in base.html so the
+                 elapsed text ticks once a second between HTMX swaps and
+                 re-anchors on each server snapshot. #}
               <div class="elapsed-time"
-                   data-elapsed-base="{{ j.elapsed_seconds }}"
-                   data-snapshot-at-ms="{{ (j.snapshot_at * 1000)|round|int }}">
-                {{ j.elapsed_seconds|duration }}
+                   data-elapsed-base="{{ _elapsed }}"
+                   data-snapshot-at-ms="{{ _snapshot_ms }}">
+                {{ _elapsed|duration }}
               </div>
             {% elif j.status == 'succeeded' %}
+              {% set _final = (j.finished_at - j.started_at) if (j.started_at and j.finished_at) else 0 %}
               <span class="progress-label muted">100%</span>
-              {% if j.elapsed_seconds %}
-                <div class="elapsed-time muted">{{ j.elapsed_seconds|duration }}</div>
+              {% if _final %}
+                <div class="elapsed-time muted">{{ _final|duration }}</div>
               {% endif %}
-            {% elif j.status == 'canceled' and j.elapsed_seconds %}
+            {% elif j.status == 'canceled' %}
+              {% set _final = (j.finished_at - j.started_at) if (j.started_at and j.finished_at) else 0 %}
               <span class="progress-label muted">canceled</span>
-              <div class="elapsed-time muted">after {{ j.elapsed_seconds|duration }}</div>
+              {% if _final %}
+                <div class="elapsed-time muted">after {{ _final|duration }}</div>
+              {% endif %}
             {% elif j.status == 'queued' %}
               <span class="progress-label muted">queued</span>
             {% else %}
