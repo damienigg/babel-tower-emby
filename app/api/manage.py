@@ -120,6 +120,29 @@ def submit_item_job(
         out.write_text(result.vtt, encoding="utf-8")
         job.output_path = str(out)
         job.cue_count = result.cue_count
+
+        # Language tag write-back: if the source track had no language tag and
+        # Whisper detected one, persist that detection to the file's audio
+        # stream metadata so Emby (and any other tool) sees the right language
+        # on next probe. Best-effort — we don't fail the job if it doesn't
+        # land, since the .vtt is already written.
+        if (
+            result.source_track_language is None
+            and result.detected_source_language
+            and settings.write_detected_language_to_file
+        ):
+            from app.pipeline import track_metadata
+            try:
+                track_metadata.write_audio_language(
+                    media, result.source_track_index, result.detected_source_language
+                )
+            except track_metadata.MetadataWriteError as e:
+                # Log to stderr so it shows up in `docker logs`. The job
+                # itself stays in 'succeeded' since the user got their .vtt.
+                import sys
+                print(f"[babel] tag write-back failed for {media}: {e}",
+                      file=sys.stderr, flush=True)
+
         try:
             emby.refresh_item(item_id)
         except EmbyError:

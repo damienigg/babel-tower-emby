@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates mkvtoolnix \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root runtime user. UID/GID 568 matches the `apps` user on TrueNAS Scale

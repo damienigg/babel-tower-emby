@@ -190,6 +190,16 @@ _FIELD_META: list[dict[str, Any]] = [
      "label": "Skip when target-language audio is already present", "type": "checkbox",
      "help": "If the file already has audio in the target language, do nothing. Saves "
              "compute on items where the user can just switch audio track in their player."},
+    {"key": "write_detected_language_to_file", "section": "Defaults",
+     "label": "Tag detected source language back into the source file", "type": "checkbox",
+     "help": "When a film's audio track has no language tag (Emby just shows 'Audio') we "
+             "always run a Whisper-tiny pre-pass to detect the language for the transcription "
+             "itself. With this checkbox ON, we ALSO write that language back into the file's "
+             "audio-stream metadata so Emby shows e.g. 'French' on next probe. MKV/MKA/WebM "
+             "are edited in place via mkvpropedit (instant, no remux). MP4/MOV/AVI/… are "
+             "remuxed via ffmpeg -c copy (no re-encode but I/O bound). Turn off to keep "
+             "source files completely untouched — detected language still drives the "
+             "transcription, just doesn't get persisted back."},
 
     # ── Translation (provider-agnostic params) ────────────────────────────────
     {"key": "nllb_model", "section": "Translation",

@@ -1,4 +1,4 @@
-from app.pipeline.lang import normalize
+from app.pipeline.lang import normalize, to_iso6392
 
 
 def test_normalize_passthrough_two_letter():
@@ -39,3 +39,36 @@ def test_normalize_und_zxx_mul_treated_as_unknown():
 def test_normalize_none_or_empty():
     assert normalize(None) is None
     assert normalize("") is None
+
+
+def test_to_iso6392_two_letter_to_three():
+    assert to_iso6392("en") == "eng"
+    assert to_iso6392("fr") == "fra"
+    assert to_iso6392("ja") == "jpn"
+    assert to_iso6392("zh") == "zho"
+    assert to_iso6392("de") == "deu"
+
+
+def test_to_iso6392_passthrough_three_letter():
+    assert to_iso6392("eng") == "eng"
+    assert to_iso6392("fra") == "fra"
+    # Bibliographic codes also stay valid since they're in our forward map.
+    assert to_iso6392("fre") == "fre"
+
+
+def test_to_iso6392_unknown_returns_none():
+    assert to_iso6392("xyz") is None
+    assert to_iso6392("not-a-language") is None
+    assert to_iso6392(None) is None
+    assert to_iso6392("") is None
+
+
+def test_to_iso6392_uses_terminological_codes():
+    """Where a language has both bibliographic ('fre') and terminological
+    ('fra') codes, prefer the modern terminological one for write-back —
+    it's what current Matroska/MP4 tools expect."""
+    assert to_iso6392("fr") == "fra"
+    assert to_iso6392("de") == "deu"
+    assert to_iso6392("zh") == "zho"
+    assert to_iso6392("cs") == "ces"
+    assert to_iso6392("el") == "ell"

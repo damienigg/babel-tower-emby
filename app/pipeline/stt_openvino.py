@@ -67,9 +67,12 @@ def transcribe(audio_path: Path, language_hint: str | None = None) -> Transcript
             continue
         cues.append(Cue(id=i, start=float(ts[0]), end=float(ts[1]), text=text))
 
-    # The HF pipeline doesn't surface the language detected by Whisper. Trust the
-    # caller's hint (which we derive from ffprobe track tags upstream); when no
-    # hint is given, fall back to "en" with the understanding that this is a
-    # known limitation of the OpenVINO backend at the moment.
+    # The HF pipeline doesn't surface the language detected by Whisper. Two
+    # sources of truth for `language_hint` upstream:
+    # 1. ffprobe track tag (when the file is properly tagged)
+    # 2. faster-whisper-tiny language-detection pre-pass run by processor.py
+    #    when the track has no tag (see app/pipeline/lang_detect.py)
+    # The "en" fallback only triggers if BOTH the file is untagged AND the
+    # pre-pass returned nothing (e.g. silent or extremely noisy first 30s).
     detected = language_hint or "en"
     return TranscriptionResult(detected_language=detected, cues=cues)

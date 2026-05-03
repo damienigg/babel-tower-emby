@@ -177,8 +177,27 @@ def process(req: ProcessRequest) -> ProcessResult:
             "no suitable source track (target-language audio already exists or only junk tracks present)"
         )
 
+    # Pre-pass language detection: when the source track has no language
+    # tag AND the configured Whisper backend is openvino (which can't
+    # surface its own auto-detection), run faster-whisper-tiny on the
+    # first 30s to nail down the language. Without this, NLLB and DeepL
+    # would get fed a wrong source_lang and produce garbage on untagged
+    # foreign-language tracks. The CPU backend (faster-whisper) detects
+    # internally during the main transcribe call, so we skip the pre-pass
+    # there.
+    needs_detection_pre_pass = (
+        track.language is None
+        and settings.whisper_backend.lower() == "openvino"
+    )
+
     with audio.extract_audio(req.media_path, track.index) as wav_path:
-        transcription = stt.transcribe(wav_path, language_hint=track.language)
+        language_hint = track.language
+        if needs_detection_pre_pass:
+            from app.pipeline import lang_detect
+            detected = lang_detect.detect(wav_path)
+            if detected:
+                language_hint = detected
+        transcription = stt.transcribe(wav_path, language_hint=language_hint)
 
     if not transcription.cues:
         raise NoSpeech(f"no speech detected in track {track.index}")
