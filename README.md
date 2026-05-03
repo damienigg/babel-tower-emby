@@ -10,7 +10,7 @@ Auto-generates target-language subtitles for media in your **Emby, Jellyfin, or 
                            ┌──────────────────────────────────────────┐
                            │ subtitle-this (FastAPI, Docker)          │
    user (web UI) ─────────▶│  Web UI (Jinja2 — settings, library,     │
-                           │            jobs, sweep)                  │
+                           │            jobs)                         │
                            │  Server-agnostic media client            │
    Media server ◀──────────│  ├─ EmbyJellyfinClient (X-Emby-Token)    │
    (Emby / Jellyfin /      │  └─ PlexClient        (X-Plex-Token)     │
@@ -22,17 +22,19 @@ Auto-generates target-language subtitles for media in your **Emby, Jellyfin, or 
                            └──────────────────────────────────────────┘
 ```
 
-**Subtitle creation is exclusively a manual user action through the web UI.** Subtitle This deliberately does NOT expose a webhook receiver, an auto-trigger on `ItemAdded` events, or a path-based curl endpoint. The two ways to create subtitles, both in the UI:
+**Subtitle creation is exclusively a manual user action through the web UI.** Subtitle This deliberately does NOT expose a webhook receiver, an auto-trigger on `ItemAdded` events, a path-based curl endpoint, OR a "subtitle the entire library" sweep button. The two ways to create subtitles, both on the Library page:
 
-- **Per item** — open `/library`, find an item, click *Subtitle this*.
-- **Whole library** — on the dashboard, click *Sweep library* to queue jobs for every item missing a subtitle in your default target language.
+- **One item** — find the row you want, click *Subtitle this*.
+- **A custom batch** — tick checkboxes on as many rows as you want (the selection persists across pages and across reloads), then click *Subtitle selected* in the sticky toolbar above the table. One job per ticked item.
+
+The whole-library sweep is intentionally absent — it was too easy to misuse and there's no real use case where "subtitle every single item in my 5000-film library at once" beats a deliberate batch selection.
 
 ## What you do as a user
 
 The whole point of Subtitle This is that you never edit a config file. You bring up the container, open `http://<host>:8765/`, and configure everything from three pages:
 
 1. **Settings page** — pick your **media server** (Emby / Jellyfin / Plex) and paste its URL + API key (Plex token), pick your translation engine (LLM or DeepL or NLLB), pick your vision engine (only if you want scene/cinematic modes), paste LLM API keys, point at endpoints. All persisted to disk and applied at runtime — no restart needed.
-2. **Library page** — browse your server's items, filter to "missing target-language sub", click *Subtitle this* on a single item, multi-select rows for a batch, or hit *Sweep* to queue every missing one in the background.
+2. **Library page** — browse your server's items, filter to "missing target-language sub", click *Subtitle this* on a single row, or multi-select rows for a custom batch (selection persists across pages).
 3. **Dashboard** — watch jobs progress in real time, sees Server / STT / LLM status pills.
 
 That's it. Env vars exist as an optional first-boot fallback for declarative deployments (TrueNAS YAML, etc.) — see the [Power-user knobs](#power-user-knobs) section at the bottom — but the canonical configuration surface is the web UI.
@@ -45,7 +47,7 @@ That's it. Env vars exist as an optional first-boot fallback for declarative dep
 | **Jellyfin** | `EmbyJellyfinClient` (shared) | `X-Emby-Token` header (legacy compat) | Open-source fork of Emby; their REST API is functionally identical for our purposes. Generate the API key in Dashboard → API Keys. |
 | **Plex** | `PlexClient` | `X-Plex-Token` header | Different API + endpoint structure; the client handles the difference internally. Find your token on plex.tv/account → Authorized Devices, or grab it from any local-server URL in your browser after signing in. |
 
-Pick your server type in Settings → Media server → Server type, paste URL + key, save. The library browser, sweep, and per-item buttons all work the same regardless of which server backs them.
+Pick your server type in Settings → Media server → Server type, paste URL + key, save. The library browser, per-item, and batch buttons all work the same regardless of which server backs them.
 
 ## Quality tiers (modes)
 
@@ -219,28 +221,30 @@ open http://localhost:8765/
 ```
 
 The web UI shows:
-- **Dashboard** (`/`) — status, recent jobs (auto-refreshing), Sweep button.
-- **Library** (`/library`) — browse your media-server items (Emby / Jellyfin / Plex), search by name, filter to "missing target-lang sub", queue a per-item job, multi-select for batch, or hit Sweep on the dashboard.
+- **Dashboard** (`/`) — status pills, recent jobs (auto-refreshing).
+- **Library** (`/library`) — browse your media-server items (Emby / Jellyfin / Plex), search by name, filter to "missing target-lang sub", click *Subtitle this* on a row, or multi-select rows for a batch (selection persists across pages and reloads).
 - **Settings** (`/settings`) — every editable parameter (media server type + creds, STT backend, Whisper model, translation provider, default target language, scene-detection knobs, LLM keys, etc.) without redeploying.
 
 Settings persist to `/cache/settings.json` and override env defaults from compose.
 
 ## Creating subtitles
 
-Two flows, both in the UI. There is no auto-trigger on item-added events, no webhook, no path-based curl endpoint — every subtitle is the result of a deliberate user action.
+Two flows, both on the Library page. There is no auto-trigger on item-added events, no webhook, no path-based curl endpoint, and no "subtitle the entire library" sweep — every subtitle is the result of a deliberate user action on a specific item or a specific batch.
 
-### Per item
+### One item
 
 1. Open `/library`.
 2. Optional: filter to *missing target-language subtitle* and search for the item you care about.
 3. Click *Subtitle this* on the row. A job appears immediately on the dashboard's *Recent jobs* table and processes in the background.
 
-### Whole library (sweep)
+### A custom batch
 
-1. On the dashboard, click *Sweep library*.
-2. Subtitle This queues one job per item missing a subtitle in your default target language. Already-subtitled items are skipped. Jobs run one at a time so the iGPU doesn't thrash.
+1. Open `/library`.
+2. Optional: filter to *missing target-language subtitle* if you want to focus on what's missing.
+3. Tick the checkbox on each row you want subtitled. Selection persists across pagination and across page reloads (stored in `localStorage` under `subtitleThis.batchSelection`), so you can build a big batch by browsing through pages.
+4. Click *Subtitle selected* in the sticky toolbar above the table. One job is queued per ticked item using the target language + mode shown in the filter form.
 
-After a job finishes, the result is cached (keyed by file fingerprint + target lang + provider + mode + STT model + translation/vision LLM model ids). Click *Subtitle this* again on the same item and it returns instantly. Switching the configured LLM in Settings invalidates the cache automatically.
+After any job finishes, the result is cached (keyed by file fingerprint + target lang + provider + mode + STT model + translation/vision LLM model ids). Click *Subtitle this* again on the same item — same params — and it returns instantly. The cache also survives mtime bumps, file renames, and our own metadata write-back step via a content-fingerprint fallback (see the source-language detection section below). Switching the configured LLM in Settings invalidates the cache automatically.
 
 ## Generating a media-server API key / token
 
@@ -369,9 +373,9 @@ Everything below is **optional**. The web UI covers the same surface and is the 
 | `BABEL_TRANSLATION_BATCH_SIZE` | `30`                 | Cues per LLM API call (text-only mode)                                  |
 | `BABEL_MAX_LINE_CHARS`         | `42`                 | Subtitle line wrap width                                                 |
 | `BABEL_MAX_LINES_PER_CUE`      | `2`                  | Max display lines per cue (overflow merges into the last line, never drops content) |
-| `BABEL_DEFAULT_TARGET_LANG`    | `fr`                 | Default target language for per-item and sweep jobs                     |
+| `BABEL_DEFAULT_TARGET_LANG`    | `fr`                 | Default target language for per-item and batch jobs                     |
 | `BABEL_DEFAULT_SOURCE_LANG_PRIORITY` | `["en","ja","*"]` | Source-language preference for track selection (JSON list)             |
-| `BABEL_DEFAULT_TRANSLATION_PROVIDER` | `nllb`       | Default provider for per-item and sweep jobs (`nllb`/`deepl`/`llm`). Default `nllb` is free, local, no key — works on both image flavors out of the box. |
+| `BABEL_DEFAULT_TRANSLATION_PROVIDER` | `nllb`       | Default provider for per-item and batch jobs (`nllb`/`deepl`/`llm`). Default `nllb` is free, local, no key — works on both image flavors out of the box. |
 | `BABEL_DEFAULT_MODE`           | `audio`              | Default quality tier — `audio` / `scene` / `cinematic`                  |
 | `BABEL_SCENE_DETECTION_THRESHOLD` | `0.4`             | ffmpeg scene-detection threshold (0–1, lower = more scenes)              |
 | `BABEL_SCENE_MIN_LENGTH_SECONDS` | `1.5`              | Skip scenes shorter than this many seconds                               |
@@ -422,9 +426,9 @@ tests/
 ├── test_processor.py          Mode validation gates
 ├── test_track_metadata.py     Language tag write-back (MKV-only via mkvpropedit)
 └── test_smoke_api.py          /health, /api/settings, /api/jobs, /api/process,
-                               /api/sweep, /api/batch, dashboards, library, partials,
-                               plus regression tests confirming /webhook/emby and
-                               /transcribe-translate are absent (404)
+                               /api/batch, dashboards, library, partials,
+                               plus regression tests confirming /webhook/emby,
+                               /transcribe-translate, AND /api/sweep are absent (404)
 ```
 
 ## Layout

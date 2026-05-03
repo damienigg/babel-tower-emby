@@ -1,6 +1,6 @@
 """Server-agnostic media-server abstraction.
 
-The pipeline (process, sweep, batch, library browser) talks to whatever media
+The pipeline (process, batch, library browser) talks to whatever media
 server the user has via this protocol. Concrete implementations live in
 sibling modules:
 
@@ -15,7 +15,6 @@ raw HTTP responses, so callers stay backend-agnostic.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Iterator
 
 from app.pipeline.lang import normalize
 
@@ -88,16 +87,6 @@ class MediaServerClient(ABC):
         search_term: str | None = None,
     ) -> MediaPage:
         """One page of video items + the server's total-count report."""
-
-    @abstractmethod
-    def iter_videos(
-        self,
-        *,
-        page_size: int = 200,
-        max_items: int | None = None,
-    ) -> Iterator[MediaItem]:
-        """Yield every video in the library, paging server-side. Stops at
-        the last page or when max_items items have been yielded."""
 
     @abstractmethod
     def refresh_item(self, item_id: str) -> None:

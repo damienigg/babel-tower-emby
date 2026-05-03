@@ -1,7 +1,8 @@
-"""Core pipeline orchestrator. The Emby-driven job runner (queued via the
-UI's per-item "Subtitle this" button or the dashboard's "Sweep library"
-button) calls into here. Subtitle creation is exclusively a manual user
-action — there is no auto-trigger or path-based CLI flow.
+"""Core pipeline orchestrator. The media-server-driven job runner (queued
+via the UI's per-item "Subtitle this" button or the multi-select batch
+action on the Library page) calls into here. Subtitle creation is
+exclusively a manual per-item or per-batch user action — there is no
+auto-trigger, no path-based CLI flow, and no whole-library sweep.
 
 Modes:
 - `audio` — Whisper → text translator. No vision.

@@ -51,8 +51,9 @@ class _EnvSettings(BaseSettings):
     max_line_chars: int = 42
     max_lines_per_cue: int = 2
 
-    # Defaults applied when the user clicks "Subtitle this" or "Sweep library"
-    # in the web UI without overriding per-item.
+    # Defaults applied when the user clicks "Subtitle this" on a row or
+    # "Subtitle selected" on the multi-select batch in the web UI without
+    # overriding per-item.
     default_target_lang: str = "fr"
     default_source_lang_priority: list[str] = ["en", "ja", "*"]
     # Default provider is `nllb`: free, fully local, no account, no API key.

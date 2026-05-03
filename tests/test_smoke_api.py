@@ -107,11 +107,14 @@ def test_process_endpoint_412_when_server_unconfigured(client, monkeypatch):
     assert r.status_code == 412
 
 
-def test_sweep_endpoint_412_when_server_unconfigured(client, monkeypatch):
-    from app.config import settings
-    monkeypatch.setattr(settings, "_overrides", {**settings._overrides, "media_server_url": "", "media_server_api_key": ""})
+def test_sweep_endpoint_does_not_exist(client):
+    """Whole-library sweep was removed by design — there is no UI affordance
+    to subtitle an entire library at once. Per-item and custom-batch flows
+    remain. POSTs to the old /api/sweep path must 404."""
     r = client.post("/api/sweep")
-    assert r.status_code == 412
+    assert r.status_code == 404
+    r2 = client.post("/api/sweep?target_lang=fr")
+    assert r2.status_code == 404
 
 
 def test_batch_endpoint_400_when_no_items_selected(client):

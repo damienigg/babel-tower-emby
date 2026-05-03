@@ -7,7 +7,7 @@ compat alongside its newer Authorization: MediaBrowser scheme), so a single
 client implementation serves both — the user just picks their server type in
 Settings for the badge label and a couple of UI hints.
 """
-from typing import Iterable, Iterator
+from typing import Iterable
 
 import httpx
 
@@ -74,25 +74,6 @@ class EmbyJellyfinClient(MediaServerClient):
         body = r.json()
         items = [_item_from_payload(it) for it in body.get("Items") or []]
         return MediaPage(items=items, total=int(body.get("TotalRecordCount", len(items))))
-
-    def iter_videos(
-        self,
-        *,
-        page_size: int = 200,
-        max_items: int | None = None,
-    ) -> Iterator[MediaItem]:
-        seen = 0
-        start = 0
-        while True:
-            page = self.list_videos(start_index=start, limit=page_size)
-            for it in page.items:
-                if max_items is not None and seen >= max_items:
-                    return
-                yield it
-                seen += 1
-            if len(page.items) < page_size:
-                return
-            start += page_size
 
     def refresh_item(self, item_id: str) -> None:
         r = self._http.post(

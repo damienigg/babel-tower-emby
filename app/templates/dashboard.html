@@ -68,33 +68,17 @@
   </div>
 </section>
 
-<section>
-  <h2>Library actions</h2>
-  <p>
-    Sweep queues a job for every library item missing a subtitle in your default
-    target language (<strong>{{ settings.default_target_lang }}</strong>). Already-subtitled items are skipped. Jobs run one at a time
-    so the iGPU doesn't thrash.
-  </p>
-  <button hx-post="/api/sweep?target_lang={{ settings.default_target_lang }}"
-          hx-confirm="Queue a job for every library item missing a {{ settings.default_target_lang }} subtitle?"
-          hx-swap="none"
-          hx-on::after-request="showSweepResult('sweep-result', event.detail.xhr, event.detail.successful)">
-    Sweep library
-  </button>
-  <span id="sweep-result"></span>
-</section>
-
 {% include "_jobs_table.html" %}
 
 <section>
   <h2>How to subtitle a film</h2>
-  <p>Two manual flows from the UI — Subtitle This never auto-translates anything on its own:</p>
+  <p>Two manual flows on the <a href="/library">Library</a> page — Subtitle This never auto-translates anything on its own, and there is no whole-library "subtitle everything" button on purpose:</p>
   <ol>
-    <li><strong>Per item</strong>: open <a href="/library">Library</a>, find the item you want,
-      click <strong>Subtitle this</strong>. The job appears below in the jobs list.</li>
-    <li><strong>Whole library</strong>: hit <strong>Sweep library</strong> above. One job is
-      queued for every item missing a subtitle in your default target language
-      (<strong>{{ settings.default_target_lang }}</strong>). Already-subtitled items are skipped.</li>
+    <li><strong>One item</strong>: find the row you want, click <strong>Subtitle this</strong>.
+      The job appears below in the jobs list.</li>
+    <li><strong>A custom batch</strong>: tick checkboxes on the rows you want (works across pages —
+      the selection is remembered), then click <strong>Subtitle selected</strong> in the
+      sticky toolbar above the table. One job is queued per ticked item.</li>
   </ol>
 </section>
 {% endblock %}

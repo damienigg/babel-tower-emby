@@ -16,13 +16,18 @@ async def lifespan(app: FastAPI):
     yield
 
 
-# Subtitle creation is exclusively a manual user action through the web UI.
-# We deliberately do NOT expose:
-# - an Emby webhook receiver (no auto-triggering on item-added events)
+# Subtitle creation is exclusively a manual user action through the web UI,
+# and only ever per-item or per-batch — never library-wide. We deliberately
+# do NOT expose:
+# - a webhook receiver (no auto-triggering on item-added events)
 # - a path-based /transcribe-translate endpoint (no curl-driven workflow)
-# The endpoints registered below back the UI buttons (library "Subtitle this",
-# dashboard "Sweep") and the auto-refreshing jobs list — they're not meant as
-# a public CLI surface.
+# - a sweep-everything endpoint (no whole-library subtitling — too much
+#   spend potential, and there's no real use case that "subtitle every
+#   item in my 5000-film library" addresses better than a deliberate
+#   batch selection)
+# The endpoints registered below back the per-item "Subtitle this" button
+# and the multi-select batch flow on the Library page, plus the auto-
+# refreshing jobs list — they're not meant as a public CLI surface.
 app = FastAPI(title="Subtitle This", version="0.3.0", lifespan=lifespan)
 
 

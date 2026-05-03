@@ -8,7 +8,7 @@ Plex's REST API is structurally different from Emby/Jellyfin:
 - There's no single `/Items?Recursive=true` endpoint. Library items live
   per *section* (`/library/sections/{key}/all`), and we have to discover
   the video-bearing sections first via `/library/sections`. list_videos
-  aggregates across video sections; iter_videos paginates per-section.
+  aggregates across all video sections.
 - Each item identifier is `ratingKey` (Plex's stable item id), exposed
   to callers as `MediaItem.id`.
 - Disk path lives at `Media[].Part[].file`, streams at
@@ -22,7 +22,7 @@ and sometimes `languageTag` (BCP 47); we feed whichever we get to
 lang.normalize() so MediaItem.has_subtitle_track works the same way as
 for Emby/Jellyfin.
 """
-from typing import Any, Iterator
+from typing import Any
 
 import httpx
 
@@ -110,28 +110,6 @@ class PlexClient(MediaServerClient):
         sliced = all_items[start_index : start_index + limit]
         return MediaPage(items=sliced, total=total)
 
-    def iter_videos(
-        self,
-        *,
-        page_size: int = 200,
-        max_items: int | None = None,
-    ) -> Iterator[MediaItem]:
-        """Stream all videos across all video sections. Paginates each section
-        independently with X-Plex-Container-Start / -Size; stops at max_items."""
-        seen = 0
-        for section_key in self._video_sections():
-            start = 0
-            while True:
-                page = self._section_page(section_key, start_index=start, limit=page_size)
-                for it in page.items:
-                    if max_items is not None and seen >= max_items:
-                        return
-                    yield it
-                    seen += 1
-                if len(page.items) < page_size:
-                    break
-                start += page_size
-
     def refresh_item(self, item_id: str) -> None:
         """Plex uses PUT for the per-item refresh trigger."""
         r = self._http.put(f"{self._base}/library/metadata/{item_id}/refresh")
@@ -190,10 +168,9 @@ class PlexClient(MediaServerClient):
         body = (r.json().get("MediaContainer") or {})
         metadata = body.get("Metadata") or []
         items = [_item_from_metadata(m) for m in metadata]
-        # Plex's totalSize is the unfiltered section count. For our purposes
-        # the container.size (this page) is fine — list_videos sums totals
-        # across sections; iter_videos uses len(page.items) < page_size to
-        # detect the last page so totalSize accuracy doesn't matter there.
+        # Plex's totalSize is the unfiltered section count; size is the
+        # number of items in this response. list_videos sums totals across
+        # sections so the slight imprecision is fine for the UI.
         total = int(body.get("totalSize") or body.get("size") or len(items))
         return MediaPage(items=items, total=total)
 

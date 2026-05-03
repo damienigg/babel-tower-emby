@@ -135,7 +135,7 @@
     {% block content %}{% endblock %}
   </main>
   <script>
-    // ── Shared HTMX result renderers (sweep button + per-item Subtitle buttons) ──
+    // ── Shared HTMX result renderer for per-item Subtitle this buttons ──
     function showJobResult(elemId, xhr, success) {
       const out = document.getElementById(elemId);
       if (!out) return;
@@ -149,16 +149,6 @@
       } else {
         const detail = (xhr.responseText || '').slice(0, 120);
         out.innerHTML = '<span class="status-pill err">HTTP ' + xhr.status + ' · ' + detail + '</span>';
-      }
-    }
-    function showSweepResult(elemId, xhr, success) {
-      const out = document.getElementById(elemId);
-      if (!out) return;
-      if (success) {
-        const r = JSON.parse(xhr.responseText);
-        out.innerHTML = '<span class="status-pill ok">submitted ' + r.submitted + ' · skipped ' + r.skipped + '</span>';
-      } else {
-        out.innerHTML = '<span class="status-pill err">sweep failed · HTTP ' + xhr.status + '</span>';
       }
     }
   </script>

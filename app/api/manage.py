@@ -44,7 +44,10 @@ class ItemSummary(BaseModel):
     has_target_subtitle: bool
 
 
-class SweepResult(BaseModel):
+class BatchResult(BaseModel):
+    """Aggregate result of a multi-item submission. Returned by /api/batch.
+    `submitted` and `skipped` add up to the size of the input id list;
+    `job_ids` only contains the ids that landed in the queue."""
     submitted: int
     skipped: int
     job_ids: list[str]
@@ -80,7 +83,7 @@ def submit_item_job(
     skip_if_target_audio_exists: bool | None = None,
 ) -> jobs.Job:
     """Queue a job for a media-server item. Used by both UI flows (per-item
-    "Subtitle this" button and the dashboard's "Sweep library") — both share
+    "Subtitle this" button and the multi-select batch action) — both share
     the same defaults-from-settings fallback semantics."""
     if not item.path:
         raise ValueError(f"item {item.id!r} has no path field")
@@ -242,13 +245,13 @@ def process_item(
     return JobView(**job.to_dict())
 
 
-@router.post("/batch", response_model=SweepResult)
+@router.post("/batch", response_model=BatchResult)
 def process_batch(
     item_id: list[str] = Form([]),
     target_lang: str | None = Form(None),
     mode: str | None = Form(None),
     translation_provider: str | None = Form(None),
-) -> SweepResult:
+) -> BatchResult:
     """Queue translation jobs for a user-selected batch of media-server items.
 
     Backs the multi-select action on the Library page: user ticks N rows,
@@ -283,42 +286,7 @@ def process_batch(
         except ValueError:
             skipped += 1
 
-    return SweepResult(submitted=len(submitted), skipped=skipped, job_ids=submitted)
-
-
-@router.post("/sweep", response_model=SweepResult)
-def sweep(
-    target_lang: str | None = None,
-    max_items: int = 5000,
-    page_size: int = 200,
-) -> SweepResult:
-    """Queue a job for every library item missing a target-language subtitle.
-    Pages server-side via the configured media server, capped by `max_items`
-    for safety. Accepts query params so HTMX's default form-POST can call it
-    without a body."""
-    target = target_lang or settings.default_target_lang
-    try:
-        server = media_server_client()
-        items = list(server.iter_videos(page_size=page_size, max_items=max_items))
-    except MediaServerError as e:
-        raise HTTPException(502, f"Media server request failed: {e}") from e
-
-    submitted: list[str] = []
-    skipped = 0
-    for item in items:
-        if item.has_subtitle_track(target):
-            skipped += 1
-            continue
-        if not item.path:
-            skipped += 1
-            continue
-        try:
-            job = submit_item_job(server=server, item=item, target_lang=target)
-            submitted.append(job.id)
-        except ValueError:
-            skipped += 1
-
-    return SweepResult(submitted=len(submitted), skipped=skipped, job_ids=submitted)
+    return BatchResult(submitted=len(submitted), skipped=skipped, job_ids=submitted)
 
 
 @router.get("/jobs", response_model=list[JobView])
