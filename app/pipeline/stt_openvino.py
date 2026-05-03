@@ -5,6 +5,8 @@ model triggers download + IR conversion (slow, 5-30 min depending on size);
 subsequent calls hit the cached IR and run on the configured device.
 """
 import logging
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable
@@ -18,6 +20,28 @@ from app.pipeline.stt import Cue, TranscriptionResult
 
 def _noop_progress(frac: float) -> None: ...
 def _noop_cancel() -> None: ...
+
+
+# Empirical real-time factors for OpenVINO Whisper on Intel iGPU (N100/N305
+# class hardware), per model. Used only to drive the cosmetic heartbeat —
+# the bar's slope is purely visual feedback, the actual finish time is
+# reported when the blocking pipe() call returns. If the estimate is too
+# fast the bar plateaus at HEARTBEAT_CAP; if too slow it never quite reaches
+# the cap and jumps from wherever to 1.0 at the end. Model-keyed so the
+# slope roughly matches reality for each whisper size — without this,
+# small/base would visibly plateau too early and large would crawl.
+_OPENVINO_RTF_BY_MODEL: dict[str, float] = {
+    "tiny": 0.04,
+    "base": 0.05,
+    "small": 0.07,
+    "medium": 0.12,
+    "large-v3-turbo": 0.12,
+    "large-v3": 0.20,
+}
+_DEFAULT_RTF = 0.10
+_HEARTBEAT_CAP = 0.95
+_HEARTBEAT_INITIAL = 0.02
+_HEARTBEAT_TICK_SECONDS = 4.0
 
 
 _log = logging.getLogger("subtitle_this")
@@ -73,12 +97,31 @@ def transcribe(
         generate_kwargs["language"] = language_hint
 
     # The HF pipeline takes the entire audio array and chunks internally —
-    # no per-chunk callback is exposed. Pretend the call linearly fills 0→1
-    # by reporting a small bump up-front, the rest at the end. UI gets a
-    # responsive bar at start + completion, with a long flat in between
-    # (the real transcribe time).
-    progress(0.05)
-    result = pipe(audio, return_timestamps=True, generate_kwargs=generate_kwargs)
+    # no per-chunk callback is exposed. To avoid a UI bar that sits frozen
+    # at 12% for 10+ minutes, run a daemon "heartbeat" thread alongside the
+    # blocking pipe() call: it bumps progress every few seconds based on
+    # elapsed time vs. an estimated transcribe duration (audio_duration *
+    # RTF). Caps at HEARTBEAT_CAP so we never overshoot the real "done"
+    # signal. Pure cosmetic — the actual transcribe is unaffected.
+    audio_duration_s = len(audio) / sr
+    rtf = _OPENVINO_RTF_BY_MODEL.get(settings.whisper_model, _DEFAULT_RTF)
+    estimated_total_s = max(30.0, audio_duration_s * rtf)
+    started = time.monotonic()
+
+    progress(_HEARTBEAT_INITIAL)
+    done = threading.Event()
+    def _heartbeat():
+        while not done.wait(timeout=_HEARTBEAT_TICK_SECONDS):
+            elapsed = time.monotonic() - started
+            frac = _HEARTBEAT_INITIAL + (elapsed / estimated_total_s) * (_HEARTBEAT_CAP - _HEARTBEAT_INITIAL)
+            progress(min(_HEARTBEAT_CAP, frac))
+    heartbeat = threading.Thread(target=_heartbeat, daemon=True)
+    heartbeat.start()
+    try:
+        result = pipe(audio, return_timestamps=True, generate_kwargs=generate_kwargs)
+    finally:
+        done.set()
+        heartbeat.join(timeout=2.0)
     check_cancel()
     progress(1.0)
 
