@@ -123,7 +123,6 @@ def process(req: ProcessRequest) -> ProcessResult:
     if not media.exists():
         raise MediaNotFound(f"media not found: {req.media_path}")
 
-    fp = cache_mod.file_fingerprint(media)
     # The cache key is built from every input that affects output:
     # - For scene/cinematic, the detection threshold + the vision LLM model
     #   (the bible depends on it).
@@ -137,18 +136,22 @@ def process(req: ProcessRequest) -> ProcessResult:
     vllm_model = (
         settings.vision_llm_model if req.mode in MULTIMODAL_MODES else None
     )
-    key = cache_mod.cache_key(
-        fp,
-        req.target_lang,
-        settings.whisper_model,
-        req.translation_provider,
-        req.source_lang_priority,
-        req.mode,
+    key_kwargs = dict(
+        target_lang=req.target_lang,
+        model=settings.whisper_model,
+        provider=req.translation_provider,
+        source_priority=req.source_lang_priority,
+        mode=req.mode,
         scene_threshold=threshold,
         translation_llm_model=tllm_model,
         vision_llm_model=vllm_model,
     )
-    cached = cache_mod.load(key)
+    # Two-level cache: the quick (path+mtime) fingerprint is the hot path;
+    # the content (mid-file bytes) fingerprint is a stable fallback that
+    # survives mtime bumps from rsync/sync tools and the mkvpropedit write-
+    # back step. On a content-fp hit, lookup_two_level re-links the payload
+    # under the current quick key so the next run hits the fast path.
+    cached, quick_key, content_key = cache_mod.lookup_two_level(media, **key_kwargs)
     if cached:
         return ProcessResult(
             vtt=cached["vtt"],
@@ -202,7 +205,14 @@ def process(req: ProcessRequest) -> ProcessResult:
     if not transcription.cues:
         raise NoSpeech(f"no speech detected in track {track.index}")
 
-    context = _build_context(req, fp, transcription.cues) if req.mode in MULTIMODAL_MODES else None
+    # For scene/cinematic, use the CONTENT fingerprint (not the quick one)
+    # to key the on-disk scene bible. The bible depends on the visual
+    # content of the film — mtime bumps and metadata-only edits don't
+    # invalidate it, so we want the bible cache to survive those too.
+    context = (
+        _build_context(req, cache_mod.content_fingerprint(media), transcription.cues)
+        if req.mode in MULTIMODAL_MODES else None
+    )
 
     try:
         provider = get_provider(req.translation_provider)
@@ -234,7 +244,9 @@ def process(req: ProcessRequest) -> ProcessResult:
         "cue_count": len(translated),
         "mode": req.mode,
     }
-    cache_mod.store(key, payload)
+    # Store under both fingerprints so any future lookup — by quick fp or
+    # by content fp after an mtime bump — retrieves the payload.
+    cache_mod.store_two_level(media, payload, **key_kwargs)
 
     return ProcessResult(
         vtt=vtt,
