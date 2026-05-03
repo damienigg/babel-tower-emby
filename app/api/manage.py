@@ -1,6 +1,7 @@
 """Media-server-driven endpoints. Resolves item IDs (Emby / Jellyfin / Plex)
 to filesystem paths, runs the pipeline, writes .vtt next to media, refreshes
 the server's metadata so it picks up the new subtitle."""
+import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Form, HTTPException
@@ -119,14 +120,21 @@ def submit_item_job(
     item_id = item.id
 
     async def runner(job: jobs.Job) -> None:
-        result = process(ProcessRequest(
-            media_path=str(media),
-            target_lang=target_lang,
-            source_lang_priority=source_priority,
-            translation_provider=provider,
-            mode=job_mode,
-            skip_if_target_audio_exists=skip_if_target,
-        ))
+        # process() is synchronous and CPU/IO-heavy (Whisper transcription
+        # alone runs 20+ min on a film). Park it on a worker thread so the
+        # event loop stays free for HTMX polling, /partials/jobs auto-
+        # refresh, server health probes, and concurrent UI clicks.
+        result = await asyncio.to_thread(
+            process,
+            ProcessRequest(
+                media_path=str(media),
+                target_lang=target_lang,
+                source_lang_priority=source_priority,
+                translation_provider=provider,
+                mode=job_mode,
+                skip_if_target_audio_exists=skip_if_target,
+            ),
+        )
         out = _vtt_path(media, target_lang, result.mode)
         out.write_text(result.vtt, encoding="utf-8")
         job.output_path = str(out)

@@ -39,8 +39,13 @@ services:
 
     environment:
       BABEL_DEEPL_API_KEY: ${DEEPL_API_KEY:-}
-      BABEL_EMBY_URL: ${EMBY_URL:-}
-      BABEL_EMBY_API_KEY: ${EMBY_API_KEY:-}
+      # Media server (Emby / Jellyfin / Plex). Easier to set from the
+      # Settings UI after first boot, but if you want the container to
+      # come up pre-configured, fill these. The api_key field doubles
+      # as the X-Plex-Token when type=plex.
+      BABEL_MEDIA_SERVER_TYPE: ${BABEL_MEDIA_SERVER_TYPE:-emby}
+      BABEL_MEDIA_SERVER_URL: ${BABEL_MEDIA_SERVER_URL:-${EMBY_URL:-}}
+      BABEL_MEDIA_SERVER_API_KEY: ${BABEL_MEDIA_SERVER_API_KEY:-${EMBY_API_KEY:-}}
       BABEL_WHISPER_BACKEND: ${BABEL_WHISPER_BACKEND:-openvino}
       BABEL_WHISPER_MODEL: ${BABEL_WHISPER_MODEL:-small}
       BABEL_OPENVINO_DEVICE: ${BABEL_OPENVINO_DEVICE:-GPU}

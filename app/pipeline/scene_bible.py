@@ -49,20 +49,41 @@ _OUTPUT_SCHEMA = {
 }
 
 
-def _active_llm_model_id() -> str:
-    """The vision LLM's model id. Used as part of the bible cache key so
-    switching models invalidates the bible."""
-    return settings.vision_llm_model
-
-
 def _bible_cache_path(media_fingerprint: str) -> Path:
-    raw = (
-        f"bible|{media_fingerprint}|{_active_llm_model_id()}"
-        f"|{settings.scene_detection_threshold:.3f}"
-    )
+    """Build the bible cache path. EVERY setting that affects bible content
+    must be in the key — otherwise switching one in the UI silently serves
+    a stale bible. See `_BIBLE_KEY_INPUTS` for the canonical list; add to
+    that tuple when introducing a new setting that influences bible output."""
+    parts = [f"bible|{media_fingerprint}"]
+    for label, value in _BIBLE_KEY_INPUTS():
+        parts.append(f"{label}={value}")
+    raw = "|".join(parts)
     key = hashlib.sha256(raw.encode()).hexdigest()[:24]
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     return settings.cache_dir / f"scene-bible-{key}.json"
+
+
+def _BIBLE_KEY_INPUTS() -> list[tuple[str, str]]:
+    """All settings that affect the generated bible. Order doesn't matter
+    for correctness but matters for the resulting key being stable across
+    runs, so keep the order fixed.
+    - vision_llm_model: the LLM that produces the scene descriptions
+    - scene_detection_threshold: changes which shots are detected
+    - scene_min_length_seconds: filters short shots from the bible
+    - scene_max_scenes: hard cap on number of scenes
+    - scene_keyframe_position: which frame of each scene is described
+    - scene_frame_max_size: image resolution sent to the vision LLM
+    - scene_bible_batch_size: scenes per LLM call (changes prompt structure)
+    """
+    return [
+        ("vllm",  settings.vision_llm_model),
+        ("thr",   f"{settings.scene_detection_threshold:.3f}"),
+        ("min",   f"{settings.scene_min_length_seconds:.3f}"),
+        ("max",   str(settings.scene_max_scenes)),
+        ("kfpos", settings.scene_keyframe_position),
+        ("kfsz",  str(settings.scene_frame_max_size)),
+        ("batch", str(settings.scene_bible_batch_size)),
+    ]
 
 
 def load_cached_bible(media_fingerprint: str) -> list[Scene] | None:
