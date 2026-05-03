@@ -47,12 +47,15 @@
           {% set v = values.get(k) %}
           {% set is_sensitive = k in sensitive %}
           {% set is_readonly = k in read_only %}
+          {# show_if: data-show-if-field/-equals lets the JS at the bottom
+             of the page conditionally hide fields whose dependent value
+             isn't met (e.g. nllb_model only when provider=nllb). The
+             check runs on initial paint AND on change of any monitored
+             field, so toggling the dependent dropdown re-evaluates. #}
+          {% set show_if = f.show_if %}
           {% if f.type == 'checkbox' %}
-            {# Checkboxes get a dedicated layout: the input + state span sit
-               on one row, with the field label as a sibling above and help
-               text below. The previous nested-label structure broke
-               alignment and caused the help text to overlap visually. #}
-            <div id="field-{{ k }}" class="field-checkbox">
+            <div id="field-{{ k }}" class="field-checkbox"
+                 {% if show_if %}data-show-if-field="{{ show_if.field }}" data-show-if-equals="{{ show_if.equals }}"{% endif %}>
               <span class="field-label">{{ f.label }}</span>
               <label class="checkbox-row">
                 <input type="checkbox" id="{{ k }}" name="{{ k }}" {% if v %}checked{% endif %} {% if is_readonly %}disabled{% endif %}>
@@ -61,7 +64,8 @@
               {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
             </div>
           {% else %}
-            <div id="field-{{ k }}">
+            <div id="field-{{ k }}"
+                 {% if show_if %}data-show-if-field="{{ show_if.field }}" data-show-if-equals="{{ show_if.equals }}"{% endif %}>
               <label for="{{ k }}">{{ f.label }}</label>
               {% if f.type == 'select' %}
                 <select id="{{ k }}" name="{{ k }}" {% if is_readonly %}disabled{% endif %}>
@@ -121,11 +125,34 @@
     }
   }
 
+  // ── Generic show_if: hide fields whose data-show-if-field doesn't match ──
+  // Fields rendered with `show_if` in _FIELD_META carry data attributes that
+  // tell us which other field's value they depend on. We re-evaluate every
+  // such field on initial paint and whenever ANY field changes value.
+  function applyShowIfRules() {
+    document.querySelectorAll('[data-show-if-field]').forEach(field => {
+      const watchedKey = field.dataset.showIfField;
+      const wantedValue = field.dataset.showIfEquals;
+      const watched = document.getElementById(watchedKey);
+      if (!watched) return;
+      const currentValue = watched.type === 'checkbox' ? (watched.checked ? 'true' : 'false')
+                                                       : watched.value;
+      field.style.display = (currentValue === wantedValue) ? '' : 'none';
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     ['translation', 'vision'].forEach(slot => {
       syncSlot(slot);
       const sel = document.getElementById(slot + '_llm_type');
       if (sel) sel.addEventListener('change', () => syncSlot(slot));
+    });
+
+    // Initial show_if pass + listen on every input/select change so any
+    // dependency re-evaluates immediately when the user changes something.
+    applyShowIfRules();
+    document.querySelectorAll('form input, form select').forEach(el => {
+      el.addEventListener('change', applyShowIfRules);
     });
 
     // Auto-fade the "saved" banner after a moment

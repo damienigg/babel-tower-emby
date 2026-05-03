@@ -22,7 +22,11 @@ class _EnvSettings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
-    openvino_device: str = "GPU"
+    # AUTO lets OpenVINO pick GPU (Intel iGPU) when available, falls back to
+    # CPU otherwise. Hidden from the Settings UI — explicit GPU/CPU choices
+    # add no value over AUTO and confused users. Power users can still
+    # override via BABEL_OPENVINO_DEVICE env var.
+    openvino_device: str = "AUTO"
 
     # ── Translation LLM ───────────────────────────────────────────────────────
     # Translates subtitle cues. In cinematic mode, also receives per-cue frames
@@ -55,7 +59,11 @@ class _EnvSettings(BaseSettings):
     # "Subtitle selected" on the multi-select batch in the web UI without
     # overriding per-item.
     default_target_lang: str = "fr"
-    default_source_lang_priority: list[str] = ["en", "ja", "*"]
+    # Source-track preference list for multi-audio films. Default prefers
+    # English then any other language. Hidden from the Settings UI — this
+    # is a niche power-user knob (most users have single-audio-track films
+    # where the choice doesn't matter). Override via env var if needed.
+    default_source_lang_priority: list[str] = ["en", "*"]
     # Default provider is `nllb`: free, fully local, no account, no API key.
     # Works on BOTH image flavors out of the box — the openvino image runs it
     # accelerated on the Intel iGPU via optimum-intel; the CPU image falls

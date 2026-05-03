@@ -169,7 +169,8 @@ _FIELD_META: list[dict[str, Any]] = [
              "Whisper has no API cost. First-time use of a model triggers a one-off "
              "download to /cache."},
     {"key": "whisper_compute_type", "section": "Speech-to-Text",
-     "label": "Compute type (CPU backend only)", "type": "select",
+     "label": "Compute type", "type": "select",
+     "show_if": {"field": "whisper_backend", "equals": "cpu"},
      "options": [
          {"value": "int8",    "label": "int8 · [fastest · lowest precision] default — works well in practice"},
          {"value": "int16",   "label": "int16 · [fast · slightly more precise]"},
@@ -179,19 +180,16 @@ _FIELD_META: list[dict[str, Any]] = [
      "help": "Quantization for faster-whisper. Lower precision = faster + less RAM, "
              "with negligible quality loss for subtitle work."},
     {"key": "whisper_device", "section": "Speech-to-Text",
-     "label": "Device (CPU backend only)", "type": "select",
+     "label": "Device", "type": "select",
+     "show_if": {"field": "whisper_backend", "equals": "cpu"},
      "options": [
          {"value": "cpu",  "label": "cpu · [universal] works on any host"},
          {"value": "cuda", "label": "cuda · [NVIDIA GPU] needs nvidia-container-toolkit (rare on TrueNAS)"},
      ],
      "help": "Where faster-whisper runs. cuda only matters if you've added an NVIDIA GPU."},
-    {"key": "openvino_device", "section": "Speech-to-Text",
-     "label": "OpenVINO device (OpenVINO backend only)", "type": "select",
-     "options": [
-         {"value": "GPU",  "label": "GPU · [iGPU · fastest] default for openvino backend"},
-         {"value": "CPU",  "label": "CPU · [no special hardware · slower] OpenVINO running on the CPU"},
-         {"value": "AUTO", "label": "AUTO · let OpenVINO pick"},
-     ]},
+    # NOTE: openvino_device is intentionally not exposed in the UI. AUTO is
+    # always the right choice (OpenVINO picks GPU when available, falls back
+    # to CPU otherwise). Power users can override via BABEL_OPENVINO_DEVICE.
 
     # ── Defaults — the cost lever ─────────────────────────────────────────────
     {"key": "default_target_lang", "section": "Defaults",
@@ -200,11 +198,9 @@ _FIELD_META: list[dict[str, Any]] = [
      "help": "Language you want subtitles in. Used when you don't override per-job. "
              "Coverage varies by translation provider — NLLB and DeepL support ~30 "
              "languages well; LLM providers handle whatever the underlying model knows."},
-    {"key": "default_source_lang_priority", "section": "Defaults",
-     "label": "Source language priority", "type": "text",
-     "help": "Comma-separated. '*' is a wildcard that matches any language. "
-             "Order = preference: 'en,ja,*' picks English audio first, then Japanese, "
-             "then anything else."},
+    # NOTE: default_source_lang_priority is intentionally not exposed.
+    # Hard-coded default ['en', '*'] in _EnvSettings handles 99% of cases.
+    # Power users can override via BABEL_DEFAULT_SOURCE_LANG_PRIORITY.
     {"key": "default_translation_provider", "section": "Defaults",
      "label": "Translation provider — pick your cost tier", "type": "select",
      "options": [
@@ -268,13 +264,25 @@ _FIELD_META: list[dict[str, Any]] = [
 
     # ── Translation (provider-agnostic params) ────────────────────────────────
     {"key": "nllb_model", "section": "Translation",
-     "label": "NLLB HF model id (only used when provider=nllb)", "type": "text",
-     "help": "facebook/nllb-200-distilled-600M (default, ~1.5 GB) is the sweet spot. "
-             "Larger variants exist (1.3B, 3.3B) — better quality, slower, more RAM."},
+     "label": "NLLB model variant", "type": "select",
+     "show_if": {"field": "default_translation_provider", "equals": "nllb"},
+     "options": [
+         {"value": "facebook/nllb-200-distilled-600M",
+          "label": "distilled-600M · [~1.5 GB · balanced] default · good quality · fast"},
+         {"value": "facebook/nllb-200-distilled-1.3B",
+          "label": "distilled-1.3B · [~3 GB · better] noticeably better fluency · 2× slower"},
+         {"value": "facebook/nllb-200-1.3B",
+          "label": "1.3B · [~5 GB · alternative] non-distilled — slightly different quality profile"},
+         {"value": "facebook/nllb-200-3.3B",
+          "label": "3.3B · [~7 GB · best · slow] highest quality · needs ~16 GB RAM · very slow on CPU"},
+     ],
+     "help": "Meta NLLB-200 model size. Bigger = better translations but slower and more RAM. "
+             "First use of a variant downloads the weights (one-off, cached in /cache/nllb-models)."},
     {"key": "translation_batch_size", "section": "Translation",
-     "label": "Cues per LLM batch (text-only mode, only used when provider=llm)", "type": "number",
-     "help": "Higher = fewer round-trips, lower = more granular failures and retries. "
-             "30 is a good balance."},
+     "label": "Cues per LLM batch", "type": "number",
+     "show_if": {"field": "default_translation_provider", "equals": "llm"},
+     "help": "Only used when provider=LLM. Higher = fewer round-trips, lower = more granular "
+             "failures and retries. 30 is a good balance."},
 
     # ── Translation model (only used when provider=llm) ───────────────────────
     {"key": "translation_llm_type", "section": "Translation model",

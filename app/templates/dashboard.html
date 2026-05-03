@@ -2,6 +2,14 @@
 {% block title %}Subtitle This — Dashboard{% endblock %}
 
 {% block content %}
+{# Cards reflect the actual config that drives jobs — we conditionally
+   render the LLM cards because they're irrelevant when provider=nllb or
+   provider=deepl, and the Vision card only when scene/cinematic mode
+   actually uses it. Showing "claude-opus-4-7" on a NLLB-default install
+   is just noise that confuses users. #}
+{% set provider = settings.default_translation_provider %}
+{% set mode = settings.default_mode %}
+{% set vision_in_use = settings.vision_llm_enabled and mode in ('scene', 'cinematic') and provider == 'llm' %}
 <section>
   <h2>Status</h2>
   <div class="grid">
@@ -11,7 +19,7 @@
       {% if server_configured %}
         <div class="pill-row">
           <span class="status-pill ok">{{ settings.media_server_type }}</span>
-          <span class="status-pill ok">configured</span>
+          <span class="status-pill ok">connected</span>
         </div>
         <p><code class="path">{{ settings.media_server_url }}</code></p>
       {% else %}
@@ -27,42 +35,72 @@
         <span class="status-pill muted">{{ settings.whisper_model }}</span>
       </div>
       <p>
-        {% if settings.whisper_backend == 'openvino' %}device: {{ settings.openvino_device }}
-        {% else %}{{ settings.whisper_compute_type }}{% endif %}
+        {% if settings.whisper_backend == 'cpu' %}
+          {{ settings.whisper_compute_type }} · {{ settings.whisper_device }}
+        {% else %}
+          OpenVINO IR
+        {% endif %}
       </p>
     </article>
 
     <article class="stat-card">
-      <header>Translation LLM</header>
-      <div class="pill-row">
-        <span class="status-pill ok">{{ settings.translation_llm_type }}</span>
-        {% if settings.translation_llm_supports_vision %}
-          <span class="status-pill muted">vision</span>
-        {% endif %}
-      </div>
-      <p><code>{{ settings.translation_llm_model }}</code></p>
-    </article>
-
-    <article class="stat-card">
-      <header>Vision LLM</header>
-      {% if settings.vision_llm_enabled %}
+      <header>Translation</header>
+      {% if provider == 'nllb' %}
         <div class="pill-row">
-          <span class="status-pill ok">{{ settings.vision_llm_type }}</span>
+          <span class="status-pill ok">NLLB-200</span>
+          <span class="status-pill muted">free · local</span>
         </div>
-        <p><code>{{ settings.vision_llm_model }}</code></p>
-      {% else %}
-        <div class="pill-row"><span class="status-pill warn">disabled</span></div>
-        <p><small>scene/cinematic modes unavailable</small></p>
+        <p>
+          {# Strip the facebook/ prefix and the nllb-200- noise so the
+             user just sees the variant size. #}
+          {% set nllb_short = settings.nllb_model | replace('facebook/nllb-200-', '') %}
+          <code>{{ nllb_short }}</code>
+        </p>
+      {% elif provider == 'deepl' %}
+        <div class="pill-row">
+          <span class="status-pill ok">DeepL</span>
+          <span class="status-pill muted">cloud · 500k/mo free</span>
+        </div>
+        <p>
+          {% if settings.deepl_api_key and settings.deepl_api_key != '[set]' %}
+            <small>API key: <code>[set]</code></small>
+          {% else %}
+            <small style="color: var(--bt-warn-fg);">⚠ DeepL API key not set</small>
+          {% endif %}
+        </p>
+      {% elif provider == 'llm' %}
+        <div class="pill-row">
+          <span class="status-pill ok">{{ settings.translation_llm_type }}</span>
+          {% if settings.translation_llm_type == 'openai_compat' %}
+            <span class="status-pill muted">cloud or local</span>
+          {% else %}
+            <span class="status-pill muted">cloud</span>
+          {% endif %}
+        </div>
+        <p><code>{{ settings.translation_llm_model }}</code></p>
       {% endif %}
     </article>
 
+    {% if vision_in_use %}
     <article class="stat-card">
-      <header>Job defaults</header>
+      <header>Vision (mode: {{ mode }})</header>
       <div class="pill-row">
-        <span class="status-pill ok">{{ settings.default_translation_provider }}</span>
-        <span class="status-pill ok">{{ settings.default_mode }}</span>
+        <span class="status-pill ok">{{ settings.vision_llm_type }}</span>
       </div>
-      <p>Target: <strong>{{ settings.default_target_lang }}</strong></p>
+      <p><code>{{ settings.vision_llm_model }}</code></p>
+    </article>
+    {% endif %}
+
+    <article class="stat-card">
+      <header>Default job</header>
+      <div class="pill-row">
+        <span class="status-pill ok">→ {{ settings.default_target_lang }}</span>
+        <span class="status-pill muted">mode: {{ mode }}</span>
+      </div>
+      <p>
+        <small>Click <em>Subtitle this</em> on a row → produces
+        <code>Movie.{{ settings.default_target_lang }}.{{ mode }}.ai.vtt</code></small>
+      </p>
     </article>
 
   </div>

@@ -44,7 +44,7 @@ RUN mkdir -p /cache && chown -R app:app /cache /app
 
 ENV BABEL_CACHE_DIR=/cache \
     BABEL_WHISPER_BACKEND=openvino \
-    BABEL_OPENVINO_DEVICE=GPU \
+    BABEL_OPENVINO_DEVICE=AUTO \
     HF_HOME=/cache/hf \
     HOME=/home/app
 VOLUME ["/cache"]
