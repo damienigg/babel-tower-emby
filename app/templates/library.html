@@ -39,9 +39,9 @@
         </select>
       </label>
     </div>
-    <label>
+    <label class="inline-checkbox">
       <input type="checkbox" name="missing_only" value="1" {% if missing_only %}checked{% endif %}>
-      <small>Only show items missing a <strong>{{ target_lang }}</strong> subtitle</small>
+      <span>Only show items missing a <strong>{{ target_lang }}</strong> subtitle</span>
     </label>
     <input type="hidden" name="limit" value="{{ limit }}">
     <button type="submit">Apply filters</button>
