@@ -14,6 +14,7 @@ from typing import Callable
 import soundfile as sf
 
 from app.config import settings
+from app.pipeline import perf_history
 from app.pipeline.openvino_introspect import log_selected_device
 from app.pipeline.stt import Cue, TranscriptionResult
 
@@ -104,7 +105,11 @@ def transcribe(
     # RTF). Caps at HEARTBEAT_CAP so we never overshoot the real "done"
     # signal. Pure cosmetic — the actual transcribe is unaffected.
     audio_duration_s = len(audio) / sr
-    rtf = _OPENVINO_RTF_BY_MODEL.get(settings.whisper_model, _DEFAULT_RTF)
+    # Use the measured-on-this-host median RTF if we have past samples for
+    # this model, otherwise fall back to the baked-in table. Self-corrects
+    # to the user's hardware after 2-3 successful runs.
+    baked_default = _OPENVINO_RTF_BY_MODEL.get(settings.whisper_model, _DEFAULT_RTF)
+    rtf = perf_history.estimated_rtf(settings.whisper_model, default=baked_default)
     estimated_total_s = max(30.0, audio_duration_s * rtf)
     started = time.monotonic()
 
@@ -123,6 +128,11 @@ def transcribe(
         done.set()
         heartbeat.join(timeout=2.0)
     check_cancel()
+    # Record the measured RTF so the next run's heartbeat estimate is
+    # calibrated to this hardware. Skipped if audio_duration is degenerate.
+    elapsed_s = time.monotonic() - started
+    if audio_duration_s > 0:
+        perf_history.record_rtf(settings.whisper_model, elapsed_s / audio_duration_s)
     progress(1.0)
 
     cues: list[Cue] = []
