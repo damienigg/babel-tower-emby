@@ -17,7 +17,15 @@ WORKDIR /app
 
 # CPU-only torch (~200 MB) — OpenVINO does the actual inference; torch is only
 # pulled in by transformers for tokenizer/feature-extractor plumbing.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+#
+# torchaudio is installed from the SAME CPU wheel index alongside torch.
+# silero-vad pulls torchaudio in as a dependency, and if pip resolves
+# torchaudio from the default PyPI index (which serves CUDA-build wheels)
+# while torch is from the CPU index, the ABIs don't match and
+# `import torchaudio` fails at runtime with OSError on _torchaudio.abi3.so.
+# Pinning both to the CPU index keeps the C extensions binary-compatible.
+RUN pip install --no-cache-dir torch torchaudio \
+    --index-url https://download.pytorch.org/whl/cpu
 
 RUN pip install --no-cache-dir \
     'fastapi>=0.115' \
