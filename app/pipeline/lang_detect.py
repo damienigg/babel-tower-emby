@@ -30,6 +30,12 @@ def _detector():
 def detect(wav_path: Path) -> str | None:
     """Run Whisper's language detection on the first ~30s of audio. Returns
     the ISO 639-1 code (e.g. 'fr', 'ja') or None if detection failed.
+
+    Reads ONLY the first 30s of the wav (not the full file). The previous
+    implementation called `sf.read(wav_path)` which loaded the entire 2h+
+    audio buffer into RAM just to slice off 30s — wasteful enough on its
+    own that it was one of two simultaneous full-wav allocations (the
+    other in stt_openvino.transcribe) right before the heaviest stage.
     """
     try:
         import soundfile as sf
@@ -37,13 +43,13 @@ def detect(wav_path: Path) -> str | None:
         return None
 
     try:
-        audio, sr = sf.read(str(wav_path))
+        with sf.SoundFile(str(wav_path)) as f:
+            if f.samplerate != 16000:
+                return None
+            sample = f.read(frames=_DETECTION_SECONDS * f.samplerate, dtype="float32")
     except Exception:
         return None
-    if sr != 16000:
-        return None
 
-    sample = audio[: _DETECTION_SECONDS * sr]
     if len(sample) == 0:
         return None
 

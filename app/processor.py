@@ -374,6 +374,7 @@ def _build_context(
             threshold=settings.scene_detection_threshold,
             min_length_seconds=settings.scene_min_length_seconds,
             max_scenes=settings.scene_max_scenes,
+            check_cancel=check_cancel,
         )
         if not scene_list:
             # No scenes detected — fall back to plain translation rather than
@@ -401,18 +402,54 @@ def _build_context(
         for s in bible if s.description
     ]
 
-    cue_frames: dict[int, bytes] = {}
+    cue_ids_with_frames: set[int] | None = None
+    cue_frames_provider = None
     if req.mode == "cinematic":
-        for cue in cues:
-            check_cancel()
-            ts = (cue.start + cue.end) / 2.0
-            try:
-                cue_frames[cue.id] = frames.extract_frame_bytes(
-                    req.media_path, ts, settings.cinematic_frame_max_size
-                )
-            except subprocess.CalledProcessError:
-                continue   # one missing frame doesn't doom the whole job
+        # Frame extraction is now LAZY + CAPPED. Previously we pre-extracted
+        # one JPEG per cue here and held the entire dict in RAM through the
+        # translation phase — for a 2 h film with heavy dialog that's
+        # 1500+ JPEGs ≈ 200-300 MB resident, plus base64 inflation per LLM
+        # call. With heavy use of cinematic mode this peak is what blew up
+        # the TrueNAS host. Two changes:
+        #
+        # 1. Cap (settings.cinematic_max_cues_with_frames): only the first N
+        #    cues get a frame. The remainder still translate — they just go
+        #    through the text-only path. Set the cap to 0 to disable per-cue
+        #    frames entirely (effectively downgrading cinematic to scene).
+        # 2. Lazy: instead of building a {cue_id: bytes} dict here, we hand
+        #    the translator a closure that calls ffmpeg per-cue at the
+        #    moment the frame is needed. The translator extracts a batch's
+        #    worth of frames at a time — peak RAM per batch is now
+        #    cinematic_batch_size frames, not len(cues).
+        cap = max(0, int(settings.cinematic_max_cues_with_frames or 0))
+        if cap > 0:
+            cue_ids_with_frames = {c.id for c in cues[:cap]}
+            media_path = req.media_path
+            frame_max = settings.cinematic_frame_max_size
+
+            def _extract_one(cue_id: int) -> bytes | None:
+                # Linear scan is fine: caps are ≤ a few thousand and this
+                # only fires per-batch (≤cinematic_batch_size times).
+                # Translators check check_cancel between batches, so a
+                # cancel here takes effect quickly even on huge films.
+                for c in cues:
+                    if c.id != cue_id:
+                        continue
+                    ts = (c.start + c.end) / 2.0
+                    try:
+                        return frames.extract_frame_bytes(
+                            media_path, ts, frame_max,
+                        )
+                    except subprocess.CalledProcessError:
+                        return None   # one missing frame doesn't doom the job
+                return None
+
+            cue_frames_provider = _extract_one
 
     return TranslationContext(
-        scenes=scene_infos, cue_to_scene=cue_to_scene, cue_frames=cue_frames
+        scenes=scene_infos,
+        cue_to_scene=cue_to_scene,
+        cue_frames={},   # eager dict stays empty — provider does the work
+        cue_frames_provider=cue_frames_provider,
+        cue_ids_with_frames=cue_ids_with_frames,
     )

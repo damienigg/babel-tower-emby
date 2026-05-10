@@ -32,12 +32,48 @@ class TranslationContext:
       so it doesn't repeat per cue batch).
     - `cue_to_scene`: cue.id → scene.index, so the translator can annotate each
       cue with the right scene description without resending the full bible.
-    - `cue_frames`: cue.id → JPEG bytes (cinematic mode only). When set, the
-      translator attaches each frame as an image block alongside its cue.
+    - `cue_frames`: cue.id → JPEG bytes (cinematic mode only, eager mode).
+      Used by tests and for small inputs where pre-extraction is fine.
+    - `cue_frames_provider`: lazy alternative to cue_frames — a callable
+      `cue → JPEG bytes | None` that the translator invokes per-batch right
+      before sending. Lets the pipeline avoid holding all 1500+ frames of a
+      feature film in RAM simultaneously. When BOTH cue_frames AND
+      cue_frames_provider are set, cue_frames takes precedence per id (so
+      tests injecting `cue_frames={...}` keep working).
+    - `cue_ids_with_frames`: optional whitelist of cue ids that should have
+      a frame attached. Lets the processor cap cinematic frame extraction
+      via settings.cinematic_max_cues_with_frames without losing the cues
+      themselves — out-of-whitelist cues still translate text-only.
     """
     scenes: list[SceneInfo] = field(default_factory=list)
     cue_to_scene: dict[int, int] = field(default_factory=dict)
     cue_frames: dict[int, bytes] = field(default_factory=dict)
+    cue_frames_provider: Callable[[int], bytes | None] | None = None
+    cue_ids_with_frames: set[int] | None = None
+
+    def has_cue_frames(self) -> bool:
+        """True iff this context wants per-cue images attached (eager dict
+        non-empty OR a lazy provider is wired up). Translators use this to
+        decide whether to use the cinematic batch size vs. the text-only one."""
+        if self.cue_frames:
+            return True
+        if self.cue_frames_provider is not None and self.cue_ids_with_frames:
+            return True
+        return False
+
+    def frame_for(self, cue_id: int) -> bytes | None:
+        """Resolve a frame for `cue_id`, preferring the eager dict (so tests
+        can inject fake JPEGs) and falling back to the lazy provider when one
+        is set AND `cue_id` is in the whitelist (or the whitelist is None,
+        meaning 'all cues')."""
+        eager = self.cue_frames.get(cue_id)
+        if eager is not None:
+            return eager
+        if self.cue_frames_provider is None:
+            return None
+        if self.cue_ids_with_frames is not None and cue_id not in self.cue_ids_with_frames:
+            return None
+        return self.cue_frames_provider(cue_id)
 
 
 class TranslationProvider(Protocol):

@@ -44,12 +44,16 @@ _BATCH = 16
 _MAX_LEN = 256
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=1)
 def _model_and_tokenizer(model_id: str, device: str, cache_root: str):
     """Cache keyed by config so settings changes reload the model. Tries the
     OpenVINO-accelerated backend first; falls back to plain PyTorch transformers
     on the CPU image. Both backends are available out of the box — the default
-    `nllb` provider works on either image flavor."""
+    `nllb` provider works on either image flavor.
+
+    maxsize=1 — switching nllb_model in the UI evicts the previous variant
+    rather than keeping both resident. NLLB-1.3B is ~3 GB; the user toggling
+    sizes shouldn't double their RAM footprint."""
     from pathlib import Path
 
     try:

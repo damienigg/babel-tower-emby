@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from app import jobs
 from app.api.manage import router as manage_router
 from app.api.settings_api import router as settings_router
+from app.auth import AuthAndCsrfMiddleware
 from app.ui.routes import router as ui_router
 
 
@@ -41,6 +42,14 @@ async def lifespan(app: FastAPI):
 # and the multi-select batch flow on the Library page, plus the auto-
 # refreshing jobs list — they're not meant as a public CLI surface.
 app = FastAPI(title="Subtitle This", version="0.4.0", lifespan=lifespan)
+
+# Auth + CSRF guard. No-op when settings.auth_credentials is unset — that's
+# the default, so the existing zero-config first-boot experience is
+# preserved. Setting BABEL_AUTH_CREDENTIALS="user:pass" (or saving the
+# value via the Settings UI) immediately gates every endpoint except
+# /health, and adds a same-origin check on POST/PATCH/PUT/DELETE so a
+# cross-site CSRF page can't ride your browser's stored Basic creds.
+app.add_middleware(AuthAndCsrfMiddleware)
 
 
 @app.get("/health")

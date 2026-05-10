@@ -7,6 +7,106 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+### Added — resource safety + auth (the OOM-prevention pass)
+
+A 2h12 film pushed a TrueNAS host into kernel-OOM territory; the post-mortem
+turned up a stack of contributors (full audio buffered in RAM, per-cue
+JPEGs pre-extracted across the whole film, three permanently-resident ML
+models, no cgroup limits on the container, no job timeout). This release
+addresses each of them.
+
+- **Audio segmentation for the OpenVINO STT path.** The wav is now read
+  in N-second segments (default 600 s ≈ 10 min) instead of slurping the
+  whole 2h+ buffer at once. Each segment is independently VAD-filtered
+  and transcribed, then released before the next is read. Peak audio
+  RAM drops from ~500 MB for a 2 h film to ~75 MB regardless of length.
+  New setting: `stt_audio_segment_seconds` (env
+  `BABEL_STT_AUDIO_SEGMENT_SECONDS`). The CPU/`faster-whisper` backend
+  streams from disk on its own and ignores this knob.
+
+  Trade-off: words straddling a segment boundary may split into two
+  cues. With 600 s segments and typical films, that's at most ~10
+  boundaries; tunable up if you'd rather trade RAM for fewer splits.
+
+- **Cinematic frames are now lazy + capped.** Previously the pipeline
+  pre-extracted one JPEG per cue across the whole film into a single
+  dict (1500+ frames ≈ 200-300 MB resident) before any translation
+  began. New behavior: a closure handed to the translator extracts
+  frames per translation batch — peak RAM is `cinematic_batch_size`
+  frames instead of all of them. Plus a new cap
+  `cinematic_max_cues_with_frames` (default 800) bounds how many cues
+  get a frame at all; out-of-cap cues still translate, just text-only.
+  Set to 0 to disable per-cue frames entirely (cinematic degrades
+  to scene-mode behavior).
+
+- **Per-job wall-clock timeout.** New `job_timeout_seconds` setting
+  (default 5400 = 90 min, 0 = unlimited). Enforced at every pipeline
+  checkpoint via `Job.check_cancel`, so a wedged Whisper run no longer
+  holds the queue lock indefinitely. A new `JobTimeout` exception
+  subclasses `JobCanceled` so existing handlers compose; the UI shows
+  the job as `failed` with `timeout: …` rather than `canceled`.
+
+- **Scene detection is now cancellable.** `ffmpeg`'s scene-detection
+  pass over a 2h+ film could run for 10+ minutes with no way to stop
+  it — `subprocess.run(..., capture_output=True)` blocked the runner.
+  The new implementation streams ffmpeg stderr line-by-line, calls
+  `check_cancel` between lines (so the deadline and user cancel both
+  reach it within a couple of seconds), and terminates the subprocess
+  cleanly on bail. Also adds `-an` to skip audio decoding — pure waste
+  of CPU on a video-only filter — and stops buffering the entire stderr
+  in RAM.
+
+- **Streamed first-30 s read for language detection.** `lang_detect`
+  previously called `sf.read(full_wav)` just to slice off the first 30
+  seconds — a 500 MB allocation right before the heaviest stage, in
+  parallel with the soon-to-be-streamed STT read of the same file.
+  Now uses `SoundFile.read(frames=30 * sr)`.
+
+- **Container-level resource limits.** `docker-compose.yml` now sets
+  `mem_limit: 6g`, `memswap_limit: 6g` (no swap escape), `cpus: "4.0"`,
+  `pids_limit: 1024`, and tightened ulimits. These are the actual
+  kernel-enforced fence — the in-process caps above reduce the chance
+  of ever hitting it. Sized for the default workload (openvino + small
+  Whisper + NLLB-600M, audio mode). Bump for whisper-medium/large or
+  NLLB-1.3B+.
+
+- **BLAS / OMP thread caps baked into both Dockerfiles.** torch,
+  transformers, numpy, and numexpr each defaulted to spawning
+  `os.cpu_count()` worker threads. On a 16-core host that's ~50
+  concurrent worker threads during transcription. Set
+  `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`,
+  `NUMEXPR_NUM_THREADS=4` and `TOKENIZERS_PARALLELISM=false` so they
+  line up with the `cpus: "4.0"` cgroup cap.
+
+- **Optional HTTP Basic auth + same-origin CSRF guard.** New
+  `auth_credentials` setting (env `BABEL_AUTH_CREDENTIALS`). Empty
+  (default) = auth off (preserves zero-config first boot). Set to
+  `user:password` to require Basic auth on every endpoint except
+  `/health`, plus a same-origin check on POST/PATCH/PUT/DELETE so a
+  malicious LAN page can't ride your saved browser credentials to start
+  jobs that burn your LLM quota. Direct API clients (curl, scripts)
+  pass on Basic creds alone — the CSRF check only fires when Origin or
+  Referer is present and mismatched.
+
+### Changed
+
+- **lru_cache(maxsize=2) → maxsize=1** for the Whisper-OV, faster-whisper,
+  and NLLB model caches. The previous size let a user toggling between
+  two models double the resident RAM (whisper-large is ~3 GB; NLLB-1.3B
+  ~3 GB) for no real workflow benefit. The cache still keys on full
+  config so same-config jobs hit cleanly.
+
+- **Pydantic `Field(ge=, le=)` bounds on numeric settings.** Previously
+  the UI accepted `scene_max_scenes=9_999_999`, `cinematic_batch_size=999`
+  etc. without complaint and only failed downstream in subprocess land.
+  Now invalid values are rejected at PATCH time with a clear error.
+
+- **Atomic `settings.json` writes** via `os.replace` from a `.tmp`
+  sidecar, plus a `threading.Lock` around the read-modify-write so two
+  simultaneous UI saves can't race. A corrupt file on load is moved to
+  `settings.json.corrupt.<ts>` and logged at WARNING, rather than
+  silently zeroing the user's API keys.
+
 ### Fixed
 - **OpenVINO STT no longer hallucinates on silence.** The OpenVINO backend
   calls `OVModel.generate()` directly (to dodge the HF pipeline's CPU↔iGPU

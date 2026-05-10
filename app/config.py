@@ -5,10 +5,18 @@ Existing code reads `from app.config import settings` and uses attribute access
 proxies attribute access — values written via the UI override env-bound defaults.
 """
 import json
+import logging
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+_log = logging.getLogger("subtitle_this")
 
 
 class _EnvSettings(BaseSettings):
@@ -58,11 +66,25 @@ class _EnvSettings(BaseSettings):
     # Other translation providers
     deepl_api_key: str | None = None
     nllb_model: str = "facebook/nllb-200-distilled-600M"
-    translation_batch_size: int = 30
+    translation_batch_size: int = Field(30, ge=1, le=200)
+
+    # Audio segmentation for the OpenVINO STT path. Splits the extracted WAV
+    # into N-second windows that are read, VAD-filtered, transcribed, and
+    # released one at a time, so peak RAM stays bounded regardless of film
+    # length. 600s (10 min) → ~75 MB float32 audio resident at any moment
+    # for a 16 kHz mono track, vs. ~500 MB for the entire 2h12 file. Only
+    # affects whisper_backend=openvino — the CPU/`faster-whisper` backend
+    # streams from disk internally and ignores this setting.
+    #
+    # Trade-off: words straddling a segment boundary may be split into two
+    # cues. With 600s segments and 1.5h-2h films that's only ~10 boundaries
+    # — the artefact rate is acceptable. Lower values reduce RAM further but
+    # multiply boundary artefacts; higher values keep more audio resident.
+    stt_audio_segment_seconds: int = Field(600, ge=60, le=3600)
 
     # Subtitle formatting
-    max_line_chars: int = 42
-    max_lines_per_cue: int = 2
+    max_line_chars: int = Field(42, ge=10, le=120)
+    max_lines_per_cue: int = Field(2, ge=1, le=4)
 
     # Defaults applied when the user clicks "Subtitle this" on a row or
     # "Subtitle selected" on the multi-select batch in the web UI without
@@ -108,17 +130,43 @@ class _EnvSettings(BaseSettings):
 
     # Scene detection (used by scene + cinematic modes). Tuning these lets
     # operators trade detection sensitivity vs. cost.
-    scene_detection_threshold: float = 0.4
-    scene_min_length_seconds: float = 1.5
-    scene_max_scenes: int = 500
+    scene_detection_threshold: float = Field(0.4, ge=0.0, le=1.0)
+    scene_min_length_seconds: float = Field(1.5, ge=0.0, le=60.0)
+    scene_max_scenes: int = Field(500, ge=1, le=2000)
     scene_keyframe_position: str = "midpoint"      # start | midpoint | end
-    scene_frame_max_size: int = 1024               # long-edge px sent to the vision LLM
-    scene_bible_batch_size: int = 10               # scenes per vision LLM call
+    scene_frame_max_size: int = Field(1024, ge=128, le=2048)   # long-edge px sent to the vision LLM
+    scene_bible_batch_size: int = Field(10, ge=1, le=50)        # scenes per vision LLM call
 
     # Cinematic mode (per-cue frame attachment). Smaller frames + smaller batches
     # because each call ships up to N images.
-    cinematic_frame_max_size: int = 768
-    cinematic_batch_size: int = 10
+    cinematic_frame_max_size: int = Field(768, ge=128, le=2048)
+    cinematic_batch_size: int = Field(10, ge=1, le=50)
+    # Hard cap on how many cues get a per-cue frame attached. A 2h+ film with
+    # heavy dialog can generate 1500+ cues — pre-extracting one JPEG per cue
+    # and holding them all in RAM (plus base64 inflation per request) is what
+    # blew up the TrueNAS host. With this cap, only the first N cues ship
+    # frames; the remaining cues still translate, just text-only. Set to 0 to
+    # downgrade cinematic to scene-only behavior on every job. The
+    # processor extracts frames lazily per translation batch (not upfront)
+    # so the cap also bounds peak RAM at one batch's worth of JPEGs.
+    cinematic_max_cues_with_frames: int = Field(800, ge=0, le=5000)
+
+    # Hard wall-clock cap on a single job (seconds). Whisper-large on a 3-hour
+    # film at int8 on CPU can legitimately take ~2 hours; 5400s (90 min) is a
+    # generous default that still kills genuinely wedged jobs. Set to 0 to
+    # disable the timeout entirely. Enforced via Job.check_cancel — every
+    # check_cancel call across the pipeline already gates on the cancel flag,
+    # so deadline-cancel uses the same code paths.
+    job_timeout_seconds: int = Field(5400, ge=0, le=86400)
+
+    # Optional HTTP Basic auth. When set to "user:password" the entire web UI
+    # and API surface require that credential, plus a same-origin check on
+    # POST/PATCH/DELETE/PUT (so a CSRF page on a different LAN host can't
+    # rinse your LLM API quota by submitting jobs through your browser).
+    # Empty string (the default) disables auth — preserves the zero-config
+    # first-boot experience. /health is always exempt so Docker healthchecks
+    # work without credentials.
+    auth_credentials: str | None = None
 
     # Media server (Emby / Jellyfin / Plex). Type drives:
     # - which client class is built (Emby+Jellyfin share one impl, Plex has its own)
@@ -145,6 +193,7 @@ SENSITIVE_FIELDS: set[str] = {
     "vision_llm_api_key",
     "deepl_api_key",
     "media_server_api_key",
+    "auth_credentials",
 }
 
 # Set of fields the UI cannot edit (operator-only via env).
@@ -157,6 +206,12 @@ class SettingsStore:
     def __init__(self, env_settings: _EnvSettings) -> None:
         self._env = env_settings
         self._file: Path = env_settings.cache_dir / "settings.json"
+        # Concurrent settings PATCHes from the UI used to race read-modify-
+        # write on _overrides. The lock is held only across the in-memory
+        # mutation + the atomic file write; reads (attr access, all_values)
+        # read the dict without locking — Python's dict is thread-safe for
+        # single-key reads and we tolerate brief inconsistency there.
+        self._write_lock = threading.Lock()
         self._overrides: dict[str, Any] = self._load()
 
     # ── public API ─────────────────────────────────────────────────────────────
@@ -193,23 +248,28 @@ class SettingsStore:
             if k in READ_ONLY_FIELDS:
                 raise ValueError(f"Setting {k!r} is read-only")
 
-        # Validate the post-update merged state against the pydantic schema.
-        proposed = {**self._env.model_dump(), **self._overrides, **kvs}
-        try:
-            _EnvSettings.model_validate(proposed)
-        except Exception as e:
-            raise ValueError(f"Invalid setting value: {e}") from e
+        with self._write_lock:
+            # Validate the post-update merged state against the pydantic
+            # schema (inside the lock so two concurrent PATCHes can't both
+            # validate independently and then race the dict write).
+            proposed = {**self._env.model_dump(), **self._overrides, **kvs}
+            try:
+                _EnvSettings.model_validate(proposed)
+            except Exception as e:
+                raise ValueError(f"Invalid setting value: {e}") from e
 
-        self._overrides.update(kvs)
-        self._save()
+            self._overrides.update(kvs)
+            self._save_locked()
 
     def reset(self, key: str) -> None:
-        self._overrides.pop(key, None)
-        self._save()
+        with self._write_lock:
+            self._overrides.pop(key, None)
+            self._save_locked()
 
     def reset_all(self) -> None:
-        self._overrides = {}
-        self._save()
+        with self._write_lock:
+            self._overrides = {}
+            self._save_locked()
 
     # ── internals ──────────────────────────────────────────────────────────────
 
@@ -218,16 +278,49 @@ class SettingsStore:
             return {}
         try:
             data = json.loads(self._file.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            # Corrupt or unreadable settings.json: previously this silently
+            # returned {} which wiped every user setting (including API keys)
+            # without a trace. Move the corrupt file aside so the user can
+            # recover it manually, log a clear warning, and start fresh.
+            try:
+                backup = self._file.with_name(
+                    f"{self._file.name}.corrupt.{int(time.time())}"
+                )
+                self._file.rename(backup)
+                _log.warning(
+                    "settings.json was unreadable (%s); backed up to %s and starting "
+                    "with defaults. Restore values manually from the backup if needed.",
+                    e, backup,
+                )
+            except OSError as backup_err:
+                _log.warning(
+                    "settings.json was unreadable (%s) AND could not be backed up (%s); "
+                    "starting with defaults.",
+                    e, backup_err,
+                )
             return {}
 
         for migration in _MIGRATIONS:
             data = migration(data)
         return data
 
-    def _save(self) -> None:
+    def _save_locked(self) -> None:
+        """Atomic write — holds self._write_lock so callers don't need to
+        lock around their write. Writes to a sibling .tmp first, then
+        os.replace's into place, so a crash/kill mid-write can never leave
+        a half-written settings.json behind.
+        """
         self._file.parent.mkdir(parents=True, exist_ok=True)
-        self._file.write_text(json.dumps(self._overrides, indent=2, sort_keys=True))
+        tmp = self._file.with_name(self._file.name + ".tmp")
+        tmp.write_text(json.dumps(self._overrides, indent=2, sort_keys=True))
+        os.replace(tmp, self._file)
+
+    # Back-compat alias so existing tests (and any external callers that
+    # poke _save()) still work. New code should go through update/reset.
+    def _save(self) -> None:
+        with self._write_lock:
+            self._save_locked()
 
 
 # ── settings.json schema migrations ───────────────────────────────────────────

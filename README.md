@@ -227,6 +227,60 @@ If your media server has a self-signed certificate but you want to keep verifica
 
 The "Verify SSL certificate" toggle stays on. This is the recommended path over the toggle-off-on-trusted-LAN approach.
 
+### Resource safety — keeping a long film from OOMing your host
+
+A 2 h+ film at cinematic mode used to peak somewhere around 5–8 GB resident
+(audio buffered in RAM + 1500 pre-extracted JPEGs + three resident ML models
++ ffmpeg's video decoder + base64 inflation per LLM call), with no cgroup
+fence — that's enough to push a TrueNAS host into kernel-OOM territory if
+ZFS ARC and other apps are competing. Three layers of mitigation now ship
+in the box:
+
+1. **Container-level cgroup limits** (`docker-compose.yml`): `mem_limit: 6g`,
+   `memswap_limit: 6g` (no swap escape — container OOMs alone), `cpus: "4.0"`,
+   `pids_limit: 1024`. The kernel enforces these, so the host stays up
+   regardless of any bug above. Bump them if you switched to
+   `whisper-medium`/`large-v3` or NLLB-1.3B+; check `docker stats subtitle-this`
+   during a real run to size your headroom.
+
+2. **In-process caps** that reduce the chance of ever hitting (1):
+   - **Audio segmentation** (`stt_audio_segment_seconds`, default 600 s)
+     reads the wav in 10-minute chunks instead of one 500 MB buffer. Peak
+     audio RAM stays ~75 MB regardless of film length.
+   - **Cinematic frame cap** (`cinematic_max_cues_with_frames`, default
+     800) bounds how many cues get a per-cue frame. Excess cues still
+     translate, just text-only. Set to 0 to disable per-cue frames
+     entirely.
+   - **Lazy frame extraction**: cinematic mode no longer pre-extracts one
+     JPEG per cue across the whole film. The translator now extracts a
+     batch's worth at a time — peak RAM per LLM call is
+     `cinematic_batch_size` frames, not `len(cues)`.
+   - **Job timeout** (`job_timeout_seconds`, default 5400 = 90 min) kills
+     a wedged job at any pipeline checkpoint, releasing the queue lock.
+     Set to 0 to disable. A timeout shows up as `failed` with `timeout: …`
+     in the UI.
+
+3. **BLAS / OMP thread caps** in both Dockerfiles (`OMP_NUM_THREADS=4` etc.)
+   so torch + numpy + transformers don't each spawn `os.cpu_count()` workers
+   on top of each other.
+
+Default settings are sized for one job at a time on the openvino + small
+Whisper + NLLB-600M default stack. If you raise model sizes, raise the
+cgroup limits to match.
+
+### Optional auth (`BABEL_AUTH_CREDENTIALS`)
+
+Subtitle This ships with no auth by default — that's the right call on a
+trusted LAN and preserves the zero-config first-boot path. On any network
+where you wouldn't trust every device, set `BABEL_AUTH_CREDENTIALS=user:password`
+(or save it from Settings → Security). Every endpoint except `/health`
+then requires Basic auth, and state-changing methods (POST/PATCH/PUT/DELETE)
+additionally check that the request's `Origin`/`Referer` matches `Host` — so
+a malicious page on another LAN host can't ride your saved browser
+credentials to queue jobs that burn your LLM quota. Direct API clients
+(curl, scripts) authenticate via Basic alone, since they aren't subject
+to CSRF.
+
 ### Untagged audio language detection + write-back
 
 When ffprobe reports a track without a language tag (e.g. Emby just shows "Audio"), Subtitle This runs a `faster-whisper-tiny` pre-pass on the first 30s of audio (~75 MB model cached on first use, ~2-3s per job). The detected language drives transcription so NLLB and DeepL get the right `source_lang`.
@@ -280,6 +334,10 @@ All configurable from the Settings UI; these env vars only matter for declarativ
 | `BABEL_MAX_LINE_CHARS` | `42` | Subtitle line wrap |
 | `BABEL_MAX_LINES_PER_CUE` | `2` | Max display lines per cue |
 | `BABEL_CACHE_DIR` | `/cache` | Cache directory |
+| `BABEL_JOB_TIMEOUT_SECONDS` | `5400` | Wall-clock cap per job; `0` disables |
+| `BABEL_STT_AUDIO_SEGMENT_SECONDS` | `600` | OpenVINO STT audio-segment size (RAM cap knob) |
+| `BABEL_CINEMATIC_MAX_CUES_WITH_FRAMES` | `800` | Hard cap on cues that get a per-cue frame; `0` disables cinematic frames |
+| `BABEL_AUTH_CREDENTIALS` | (unset) | `user:password` for HTTP Basic auth; unset = no auth |
 
 ## Tests
 
@@ -288,7 +346,7 @@ pip install -e .[dev]
 pytest
 ```
 
-166 tests covering pure-logic (language normalization, VTT formatting, track selection, scene mapping, settings store with migrations, batching, cache key invalidation, two-level cache fingerprint, Emby/Jellyfin payload parsing, Plex API translation, LLM translation provider edge cases, UI form coercion) plus FastAPI smoke tests for every route. Heavy externals (ffmpeg, Whisper, LLM/server APIs) are stubbed — the suite runs in ~1s.
+222 tests covering pure-logic (language normalization, VTT formatting, track selection, scene mapping, settings store with migrations + atomic writes + corrupt-file recovery, batching, cache key invalidation, two-level cache fingerprint, Emby/Jellyfin payload parsing, Plex API translation, LLM translation provider edge cases including lazy cinematic-frame plumbing, UI form coercion, job deadline enforcement) plus FastAPI smoke tests for every route and the auth + same-origin middleware. Heavy externals (ffmpeg, Whisper, LLM/server APIs) are stubbed — the suite runs in ~5s.
 
 ## Layout
 
@@ -304,9 +362,10 @@ subtitle-this/
 ├── CHANGELOG.md
 └── app/
     ├── main.py                     FastAPI entry
-    ├── config.py                   Layered settings + migrations
+    ├── auth.py                     Optional HTTP Basic + same-origin CSRF middleware
+    ├── config.py                   Layered settings + migrations + atomic persist
     ├── cache.py                    Two-level fingerprint transcript cache
-    ├── jobs.py                     In-memory job queue
+    ├── jobs.py                     In-memory job queue + per-job wall-clock timeout
     ├── processor.py                Pipeline orchestrator
     ├── api/
     │   ├── manage.py               Server-driven endpoints

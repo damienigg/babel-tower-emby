@@ -78,6 +78,18 @@ templates.env.globals["now"] = _time.time
 # Whisper choices have NO $ cost — only compute time × disk space.
 
 _SECTION_META: dict[str, str] = {
+    "Resource safety": (
+        "Caps that keep a single job from consuming the host. The defaults are "
+        "sized for a 2 h film on a 6 GB / 4 vCPU container. Combine these with "
+        "the cgroup limits in docker-compose.yml — the kernel limits are the "
+        "actual fence; the in-process caps reduce the chance of ever hitting it."
+    ),
+    "Security": (
+        "Optional HTTP Basic auth in front of the whole app. OFF by default "
+        "for the zero-config first-boot experience. Turn ON on any network "
+        "where you wouldn't trust every device to start jobs or read your "
+        "API keys."
+    ),
     "Media server": (
         "START HERE — without a working media server connection nothing else "
         "is reachable. Pick your server type, paste its URL + API key (X-Plex-"
@@ -149,6 +161,43 @@ _SECTION_SHOW_IF: dict[str, dict] = {
 
 
 _FIELD_META: list[dict[str, Any]] = [
+    # ── Resource safety ─────────────────────────────────────────────────────
+    # These caps prevent a long film + heavy mode from consuming all host
+    # RAM. They complement the cgroup limits in docker-compose.yml.
+    {"key": "job_timeout_seconds", "section": "Resource safety",
+     "label": "Job wall-clock timeout (seconds)", "type": "number",
+     "help": "Hard cap on a single job's runtime. 5400 = 90 min — generous for "
+             "a 3 h film at whisper-large on int8 CPU. Set to 0 to disable. "
+             "Enforced at every pipeline checkpoint (between audio segments, "
+             "between translation batches, between scene-detect ffmpeg lines) "
+             "so a wedged job can't hold the queue indefinitely."},
+    {"key": "stt_audio_segment_seconds", "section": "Resource safety",
+     "label": "OpenVINO STT audio-segment size (seconds)", "type": "number",
+     "help": "How much audio is loaded into RAM at once for the OpenVINO "
+             "Whisper backend. 600 = 10 min, ~75 MB resident regardless of "
+             "film length. Lower values reduce RAM further; higher values "
+             "have fewer segment-boundary cue splits. Ignored when "
+             "whisper_backend = cpu (faster-whisper streams from disk on its own)."},
+    {"key": "cinematic_max_cues_with_frames", "section": "Resource safety",
+     "label": "Cinematic — max cues that get a frame attached", "type": "number",
+     "help": "Hard cap on per-cue frame extraction in cinematic mode. A 2 h+ "
+             "dialog-heavy film can produce 1500+ cues — pre-extracting one "
+             "JPEG per cue is what caused the original TrueNAS OOM. With this "
+             "cap, only the first N cues ship frames; remaining cues translate "
+             "text-only (still using the scene bible). Set to 0 to disable "
+             "per-cue frames entirely (cinematic ≈ scene mode)."},
+
+    # ── Security ────────────────────────────────────────────────────────────
+    {"key": "auth_credentials", "section": "Security",
+     "label": "HTTP Basic credentials (user:password)", "type": "password",
+     "help": "Leave BLANK for no auth (default — preserves zero-config first "
+             "boot). Set to 'user:password' to require Basic auth on every "
+             "endpoint except /health. Adds a same-origin check on POST/PATCH/"
+             "PUT/DELETE so a malicious LAN page can't ride your saved browser "
+             "credentials to start jobs. Apply this on any network where you "
+             "wouldn't trust every device — the Library page can queue jobs "
+             "that consume your LLM quota."},
+
     # ── Media server (Emby / Jellyfin / Plex) — REQUIRED FIRST ────────────────
     # Nothing in the rest of the app works until this section is filled in
     # (Library page is empty, "Subtitle this" buttons fail). Put it at the

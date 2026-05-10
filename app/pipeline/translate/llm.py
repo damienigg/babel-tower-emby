@@ -87,7 +87,7 @@ class LLMTranslationProvider:
         progress: Callable[[float], None] = _noop_progress,
         check_cancel: Callable[[], None] = _noop_cancel,
     ) -> list[Cue]:
-        cinematic = bool(context and context.cue_frames)
+        cinematic = bool(context and context.has_cue_frames())
         if cinematic and not self._client.supports_vision():
             raise TranslationError(
                 "cinematic mode attaches per-cue frames to translation calls, so "
@@ -124,11 +124,17 @@ class LLMTranslationProvider:
                     entry["scene"] = scene.description
             payload.append(entry)
 
-        # Build the user content: optional per-cue frames first, then the JSON payload.
+        # Build the user content: optional per-cue frames first, then the JSON
+        # payload. Frames are resolved through context.frame_for(cue_id) which
+        # prefers the eager dict (tests inject fake JPEGs there) and falls
+        # back to the lazy provider that calls ffmpeg on demand. Per-batch
+        # extraction means we hold at most `cinematic_batch_size` JPEGs in
+        # RAM at once, instead of pre-extracting one per cue across the whole
+        # film and stuffing the dict.
         user_content: list[ContentBlock] = []
-        if context and context.cue_frames:
+        if context and context.has_cue_frames():
             for c in batch:
-                kf = context.cue_frames.get(c.id)
+                kf = context.frame_for(c.id)
                 if not kf:
                     continue
                 user_content.append(TextContent(text=f"Frame for cue {c.id}:"))

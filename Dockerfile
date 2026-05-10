@@ -41,7 +41,16 @@ RUN mkdir -p /cache && chown -R app:app /cache /app
 
 ENV BABEL_CACHE_DIR=/cache \
     HF_HOME=/cache/hf \
-    HOME=/home/app
+    HOME=/home/app \
+    # Cap BLAS / OMP / torch worker threads so torch + transformers + numpy
+    # don't each spawn os.cpu_count() threads concurrently. Without these,
+    # a 16-core host runs ~50 worker threads during transcription and the
+    # CPU wedges. 4 lines up with the cpus: "4.0" cap in docker-compose.
+    OMP_NUM_THREADS=4 \
+    OPENBLAS_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4 \
+    NUMEXPR_NUM_THREADS=4 \
+    TOKENIZERS_PARALLELISM=false
 VOLUME ["/cache"]
 
 USER app

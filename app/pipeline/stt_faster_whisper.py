@@ -8,10 +8,12 @@ from app.config import settings
 from app.pipeline.stt import Cue, TranscriptionResult
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=1)
 def _model(name: str, device: str, compute_type: str) -> WhisperModel:
     """Cache keyed by config so settings changes (UI or env) reload the model.
-    maxsize=2 keeps one fallback warm when the user toggles between two models."""
+    maxsize=1 — toggling whisper_model in the UI evicts the previous one
+    rather than keeping both resident. Whisper-large weights are ~3 GB;
+    holding a spare doubles RAM for no real workflow benefit."""
     return WhisperModel(name, device=device, compute_type=compute_type)
 
 

@@ -22,6 +22,30 @@ services:
     ports:
       - "8765:8765"
 
+    # cgroup limits — enforced by the kernel so a runaway transcription
+    # CANNOT take the host down. Sized for the default workload (one job at
+    # a time, openvino+small Whisper, NLLB-600M, audio mode on a 2h film):
+    # ~2-3 GB peak observed; 6g leaves headroom for a longer film or scene/
+    # cinematic mode. Bump if you switched to whisper-medium/large or
+    # NLLB 1.3B+. memswap == mem disables swap escape so the container OOMs
+    # on its own ceiling instead of paging the host into oblivion.
+    #
+    # IMPORTANT for TrueNAS Apps users: these `mem_limit` / `cpus` / etc.
+    # keys are recognized by `docker compose` directly. If you deploy via
+    # the TrueNAS Apps "Custom App" UI (which uses the same Compose schema),
+    # they apply unchanged. If you ever switch to the Compose v3
+    # `deploy.resources.limits` block, recall that swarm-mode is what
+    # interprets that — under plain Docker Compose only the top-level
+    # `mem_limit`/`cpus` keys take effect.
+    mem_limit: 6g
+    memswap_limit: 6g
+    cpus: "4.0"
+    pids_limit: 1024
+    # Tighten ulimits a touch — ffmpeg and torch can fork-spam on bugs.
+    ulimits:
+      nproc: 4096
+      nofile: 8192
+
     # Runtime user. The image defaults to `app` (UID/GID 568) which matches
     # TrueNAS Scale's `apps` user, so on TrueNAS this Just Works. Override via
     # PUID/PGID env vars if your host uses a different UID, e.g.
@@ -62,6 +86,21 @@ services:
       BABEL_VISION_LLM_ENDPOINT: ${BABEL_VISION_LLM_ENDPOINT:-https://api.openai.com/v1}
       BABEL_VISION_LLM_API_KEY: ${BABEL_VISION_LLM_API_KEY:-}
       BABEL_VISION_LLM_ENABLED: ${BABEL_VISION_LLM_ENABLED:-true}
+      # Optional HTTP Basic auth — "user:password". Empty (default) =
+      # auth off. With a value set, every endpoint except /health requires
+      # the credential, plus a same-origin check on POST/PATCH/DELETE/PUT
+      # blocks cross-site CSRF abuse of the stored browser credentials.
+      BABEL_AUTH_CREDENTIALS: ${BABEL_AUTH_CREDENTIALS:-}
+      # Wall-clock cap for a single job, in seconds. 0 disables. 5400 = 90 min.
+      BABEL_JOB_TIMEOUT_SECONDS: ${BABEL_JOB_TIMEOUT_SECONDS:-5400}
+      # OpenVINO STT audio segmentation. Splits the extracted WAV into
+      # N-second windows so peak audio RAM stays bounded regardless of
+      # film length. 600s = 10 min ≈ 75 MB resident per segment.
+      BABEL_STT_AUDIO_SEGMENT_SECONDS: ${BABEL_STT_AUDIO_SEGMENT_SECONDS:-600}
+      # Hard cap on cues that get a per-cue frame in cinematic mode.
+      # The remaining cues still translate, just text-only. 0 disables
+      # cinematic frame extraction entirely.
+      BABEL_CINEMATIC_MAX_CUES_WITH_FRAMES: ${BABEL_CINEMATIC_MAX_CUES_WITH_FRAMES:-800}
 
     volumes:
       # Cache: OpenVINO IR (slow first-run, fast after), HF model downloads,
