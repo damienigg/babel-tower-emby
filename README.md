@@ -346,7 +346,7 @@ pip install -e .[dev]
 pytest
 ```
 
-222 tests covering pure-logic (language normalization, VTT formatting, track selection, scene mapping, settings store with migrations + atomic writes + corrupt-file recovery, batching, cache key invalidation, two-level cache fingerprint, Emby/Jellyfin payload parsing, Plex API translation, LLM translation provider edge cases including lazy cinematic-frame plumbing, UI form coercion, job deadline enforcement) plus FastAPI smoke tests for every route and the auth + same-origin middleware. Heavy externals (ffmpeg, Whisper, LLM/server APIs) are stubbed — the suite runs in ~5s.
+224 tests covering pure-logic (language normalization, VTT formatting, track selection, scene mapping, settings store with migrations + atomic writes + corrupt-file recovery, batching, cache key invalidation, two-level cache fingerprint, Emby/Jellyfin payload parsing, Plex API translation, LLM translation provider edge cases including lazy cinematic-frame plumbing, UI form coercion, job deadline enforcement) plus FastAPI smoke tests for every route and the auth + same-origin middleware. Heavy externals (ffmpeg, Whisper, LLM/server APIs) are stubbed — the suite runs in ~5s.
 
 ## Layout
 

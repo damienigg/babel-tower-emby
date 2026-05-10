@@ -22,6 +22,33 @@ def test_health_returns_ok(client):
     assert r.json() == {"status": "ok"}
 
 
+def test_version_endpoint_matches_package_version(client):
+    """GET /api/version is the programmatic source of truth and must match
+    app.__version__. Single source of truth is app/__init__.py — any drift
+    means either pyproject.toml, the FastAPI app, or the footer are out of
+    sync, which is exactly the failure this test prevents."""
+    from app import __version__
+    r = client.get("/api/version")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"version": __version__}
+    # Sanity-check the shape rather than the literal — semver-ish strings
+    # like "0.5.0" or "0.5.0+dirty" both pass.
+    assert isinstance(body["version"], str) and body["version"]
+
+
+def test_version_renders_in_page_footer(client):
+    """The footer in base.html (inherited by every page) shows the version
+    so operators looking at the running container can identify the build
+    without shelling in. If a template refactor drops the footer this
+    test catches it."""
+    from app import __version__
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "app-footer" in r.text
+    assert f"v{__version__}" in r.text
+
+
 def test_settings_page_renders_with_cost_ladder(client):
     """The HTML settings page must render without errors and surface the
     cost-ladder hero + per-section descriptions that guide users from the

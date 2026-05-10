@@ -7,6 +7,17 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-10
+
+The resource-safety + observability release. Triggered by a TrueNAS host
+that kernel-OOM'd while subtitling a 2 h 12 min film — this version closes
+the entire class of "long film eats all available RAM" failures, adds a
+job-wide deadline so a wedged run can't camp on the queue lock, and ships
+an optional HTTP Basic + same-origin guard for any deployment where the
+LAN isn't fully trusted. The running version is now rendered in the footer
+of every page and exposed via `GET /api/version` so it's obvious which
+build you're talking to.
+
 ### Added — resource safety + auth (the OOM-prevention pass)
 
 A 2h12 film pushed a TrueNAS host into kernel-OOM territory; the post-mortem
@@ -87,6 +98,13 @@ addresses each of them.
   jobs that burn your LLM quota. Direct API clients (curl, scripts)
   pass on Basic creds alone — the CSRF check only fires when Origin or
   Referer is present and mismatched.
+
+- **Running version is now visible.** The footer of every page renders
+  `Subtitle This v0.5.0` so it's immediately clear which build you're
+  looking at. `GET /api/version` returns `{"version": "0.5.0"}` for
+  scripts and monitoring. Single source of truth is
+  `app/__init__.py:__version__` — both `pyproject.toml`, the FastAPI
+  app, the OpenAPI doc, and the footer read from there.
 
 ### Changed
 

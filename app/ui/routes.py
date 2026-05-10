@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from app import jobs
+from app import __version__, jobs
 from app.api.manage import media_server_client
 from app.config import READ_ONLY_FIELDS, SENSITIVE_FIELDS, _EnvSettings, settings
 from app.pipeline.lang import LANGUAGE_OPTIONS
@@ -57,6 +57,10 @@ templates.env.filters["duration"] = _format_duration
 # each template render gets a fresh value (Jinja calls it per use).
 import time as _time
 templates.env.globals["now"] = _time.time
+# Single source of truth: app/__init__.py:__version__. Exposed as a Jinja
+# global so every rendered page can show the running version in its
+# footer without each route having to thread it through context.
+templates.env.globals["app_version"] = __version__
 
 
 # ── Settings UI metadata ─────────────────────────────────────────────────────
