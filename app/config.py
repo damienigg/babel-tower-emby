@@ -94,6 +94,23 @@ class _EnvSettings(BaseSettings):
     # multiply boundary artefacts; higher values keep more audio resident.
     stt_audio_segment_seconds: int = Field(600, ge=60, le=3600)
 
+    # Pack multiple short speech regions into one 30 s Whisper decoder
+    # window with brief silence pads between, then demultiplex cue
+    # timestamps after decode. Cuts iGPU work 1.5-3× on dialog-heavy
+    # films (typical regions are 3-10 s; without packing each becomes
+    # a 30 s decoder window that's mostly zero-pad). Default ON — drop
+    # to false as an escape hatch if you see misattributed cues at
+    # region boundaries on a specific film. OpenVINO-only (the CPU/
+    # faster-whisper backend handles its own longform batching).
+    stt_region_packing: bool = True
+    # Forward overlap (seconds) added to each STT audio-segment read so
+    # speech regions straddling a segment boundary get processed in full
+    # within one segment instead of being split. 30 s is one decoder
+    # window — large enough to absorb the longest contiguous utterance
+    # that could realistically span a boundary. Costs ~1.9 MB extra peak
+    # RAM during the read.
+    stt_segment_overlap_seconds: int = Field(30, ge=0, le=120)
+
     # Subtitle formatting
     max_line_chars: int = Field(42, ge=10, le=120)
     max_lines_per_cue: int = Field(2, ge=1, le=4)
@@ -231,9 +248,12 @@ class SettingsStore:
         self._file: Path = env_settings.cache_dir / "settings.json"
         # Concurrent settings PATCHes from the UI used to race read-modify-
         # write on _overrides. The lock is held only across the in-memory
-        # mutation + the atomic file write; reads (attr access, all_values)
-        # read the dict without locking — Python's dict is thread-safe for
-        # single-key reads and we tolerate brief inconsistency there.
+        # rebind + the atomic file write; reads (attr access, all_values)
+        # never touch the lock. Consistency across readers is provided by
+        # the copy-on-write rebind in `update()` / `reset()` / `reset_all()`
+        # — each mutation builds a NEW dict and atomically rebinds
+        # `self._overrides`, so a reader either sees the full pre-update
+        # snapshot or the full post-update one, never a half-applied state.
         self._write_lock = threading.Lock()
         self._overrides: dict[str, Any] = self._load()
 
@@ -281,12 +301,20 @@ class SettingsStore:
             except Exception as e:
                 raise ValueError(f"Invalid setting value: {e}") from e
 
-            self._overrides.update(kvs)
+            # Copy-on-write rebind: a concurrent __getattr__ never sees a
+            # partially-applied dict because we publish the new state by
+            # rebinding `self._overrides` (atomic at the Python level)
+            # rather than mutating the existing dict in place.
+            self._overrides = {**self._overrides, **kvs}
             self._save_locked()
 
     def reset(self, key: str) -> None:
         with self._write_lock:
-            self._overrides.pop(key, None)
+            if key not in self._overrides:
+                return
+            new_overrides = dict(self._overrides)
+            new_overrides.pop(key, None)
+            self._overrides = new_overrides
             self._save_locked()
 
     def reset_all(self) -> None:

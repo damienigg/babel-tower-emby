@@ -32,6 +32,10 @@ def probe(media_path: str) -> list[AudioTrack]:
             media_path,
         ],
         capture_output=True, text=True, check=True,
+        # ffprobe on a healthy file completes in ms; 30s is plenty even
+        # for slow network mounts. Without a timeout a wedged ffprobe
+        # would park the worker indefinitely.
+        timeout=30,
     )
     data = json.loads(result.stdout)
     tracks: list[AudioTrack] = []

@@ -38,6 +38,7 @@ def _media_duration(media_path: str) -> float:
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", media_path],
         capture_output=True, text=True, check=True,
+        timeout=30,
     )
     return float(result.stdout.strip())
 

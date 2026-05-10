@@ -97,6 +97,15 @@ services:
       # N-second windows so peak audio RAM stays bounded regardless of
       # film length. 600s = 10 min ≈ 75 MB resident per segment.
       BABEL_STT_AUDIO_SEGMENT_SECONDS: ${BABEL_STT_AUDIO_SEGMENT_SECONDS:-600}
+      # Forward overlap on segment reads so a speech region straddling
+      # a segment boundary is processed in full within one segment. 30s
+      # ≈ one decoder window; +~1.9 MB peak RAM during the read.
+      BABEL_STT_SEGMENT_OVERLAP_SECONDS: ${BABEL_STT_SEGMENT_OVERLAP_SECONDS:-30}
+      # Pack multiple short speech regions into shared 30s decoder
+      # windows with brief silence pads. Cuts iGPU work 1.5-3× on
+      # dialog-heavy films. Disable as an escape hatch on films where
+      # you see misattributed cues at region boundaries.
+      BABEL_STT_REGION_PACKING: ${BABEL_STT_REGION_PACKING:-true}
       # Hard cap on cues that get a per-cue frame in cinematic mode.
       # The remaining cues still translate, just text-only. 0 disables
       # cinematic frame extraction entirely.

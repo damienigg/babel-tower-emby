@@ -108,16 +108,39 @@ def _noop_cancel() -> None: ...
 
 def describe_scenes(
     scene_list: list[Scene],
-    keyframes: dict[int, bytes],
+    keyframes: dict[int, bytes] | None = None,
     *,
+    keyframe_provider: Callable[[Scene], bytes | None] | None = None,
     check_cancel: Callable[[], None] = _noop_cancel,
 ) -> list[Scene]:
-    """Fill in Scene.description for each scene whose keyframe bytes are in
-    `keyframes` (mapping scene.index → JPEG bytes). Modifies in place.
+    """Fill in Scene.description for each scene whose keyframe bytes are
+    available. Modifies in place.
 
-    Calls `check_cancel` between LLM batches so a cancel click during a long
-    bible build (5-15 min on a feature film) takes effect within one batch
-    instead of blocking until the whole bible is done."""
+    Two ways to supply keyframes:
+
+    - `keyframes` (eager): a `{scene.index: jpeg_bytes}` dict pre-built by
+      the caller. Used by tests and small inputs where pre-extraction is
+      fine. Up to `scene_max_scenes` (default 500) entries — at ~250 KB
+      each that's ~125 MB held through the entire 5-15 min bible build,
+      which is the anti-pattern we're trying to avoid.
+
+    - `keyframe_provider` (lazy): a closure `scene → bytes | None`. The
+      provider is called per-batch right before the LLM request, so peak
+      RAM is `scene_bible_batch_size` frames (~2.5 MB at the default
+      batch=10), not `scene_max_scenes` frames. This is the default path
+      from processor._build_context.
+
+    Exactly one of `keyframes` / `keyframe_provider` should be set;
+    `keyframes` wins when both are passed (so the eager dict can carry a
+    test fixture's fakes while a real provider is also wired). Scenes
+    whose keyframe extraction fails (provider returns None, or the eager
+    dict lacks the entry) are silently skipped — one missing frame
+    doesn't doom the whole bible.
+
+    `check_cancel` runs between LLM batches so a cancel click during a
+    long bible build takes effect within one batch (typically 1-5 s on
+    Anthropic with prompt caching).
+    """
     try:
         client = get_vision_llm()
     except LLMError as e:
@@ -125,12 +148,21 @@ def describe_scenes(
 
     by_index = {s.index: s for s in scene_list}
     system = [SystemBlock(text=_DESCRIBE_PROMPT, cacheable=True)]
+    keyframes = keyframes or {}
+
+    def _frame_for(scene: Scene) -> bytes | None:
+        eager = keyframes.get(scene.index)
+        if eager is not None:
+            return eager
+        if keyframe_provider is None:
+            return None
+        return keyframe_provider(scene)
 
     for batch in batches(scene_list, settings.scene_bible_batch_size):
         check_cancel()
         content = []
         for scene in batch:
-            kf = keyframes.get(scene.index)
+            kf = _frame_for(scene)
             if not kf:
                 continue
             content.append(TextContent(text=f"Scene {scene.index}:"))

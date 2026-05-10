@@ -24,9 +24,13 @@ class EmbyJellyfinClient(MediaServerClient):
         if not base_url or not api_key:
             raise MediaServerError("Server URL and API key are required")
         self._base = base_url.rstrip("/")
+        # 60 s timeout: large Emby/Jellyfin libraries (100 k+ items)
+        # can take >30 s to serve /Items?Recursive=true on slow storage.
+        # 30 s was too tight on real deployments — we'd see spurious
+        # ReadTimeout errors on Library page renders.
         self._http = httpx.Client(
             headers={"X-Emby-Token": api_key, "Accept": "application/json"},
-            timeout=30.0,
+            timeout=60.0,
             verify=verify_ssl,
         )
 

@@ -7,6 +7,105 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-10
+
+The performance-within-safety release. Headline: **STT region packing**
+cuts iGPU compute 1.5-3× on dialog-heavy films by concatenating short
+speech regions into shared 30 s decoder windows. Plus a sweep of
+remaining safety contributors that the second code-review surfaced:
+audio temp file relocated off /tmp, asyncio executor capped to 4
+workers, scene-bible keyframes now lazy (same anti-pattern we already
+fixed for cinematic, at smaller scale), settings persistence uses
+copy-on-write so concurrent readers can't see half-applied state, LLM
+clients disabled SDK-level retries to keep the per-call timeout a true
+ceiling, and ffmpeg/ffprobe subprocesses + media-server HTTP clients
+got proper timeouts.
+
+### Added — performance + correctness
+
+- **STT region packing.** New module `app/pipeline/packing.py`. When the
+  VAD finds short speech regions (3-10 s, the typical dialog
+  utterance), the planner concatenates several into a single 30 s
+  Whisper decoder window with brief silence pads between, then
+  demultiplexes the emitted cues back to original-audio timestamps via
+  each window's `region_map`. On dialog-heavy films this cuts iGPU work
+  ~2-3× because each chunk used to be mostly zero-padding (a 7 s region
+  in a 30 s window is 77% wasted decode). Default ON via
+  `stt_region_packing`; flip false as an escape hatch if a specific
+  film shows misattributed cues at region boundaries.
+
+- **Cross-segment region merging.** STT segment reads now pull an extra
+  `stt_segment_overlap_seconds` (default 30 s) past each segment
+  boundary. A speech region that straddles the boundary is processed
+  fully within one segment; the next segment skips ahead to where the
+  previous one stopped. Eliminates the split-word artifacts at segment
+  boundaries that the audio-segmentation feature introduced in 0.5.0.
+  Costs ~1.9 MB extra peak RAM during the read.
+
+- **Scene-bible keyframes are now lazy** (mirroring the cinematic
+  cue_frames refactor from 0.5.0). The processor passes a closure to
+  `scene_bible.describe_scenes(keyframe_provider=...)`; each LLM batch
+  extracts its `scene_bible_batch_size` (default 10) frames inline and
+  releases them. Drops peak RAM during the 5-15 min bible build from
+  ~125 MB (500 scenes × 250 KB JPEGs) to ~2.5 MB.
+
+- **`faster_whisper.detect_language()` for the pre-pass.** The previous
+  shim ran a full `transcribe()` call and discarded the segments just
+  to read `info.language`. Switched to the SDK's dedicated single-pass
+  language-detection API — ~3-5× faster on the pre-pass with the same
+  accuracy.
+
+- **`cinematic_frame_accurate_seek` end-to-end coverage**: the option
+  from 0.5.0 is now exercised in tests (fast / accurate / accurate-at-
+  zero-timestamp fallback).
+
+### Changed — safety + concurrency
+
+- **Audio temp files relocated to `<cache_dir>/tmp/`** (was `/tmp`). For
+  a 2 h film at 16 kHz mono 16-bit WAV that's ~250 MB. On TrueNAS,
+  `/tmp` is commonly tmpfs and counts against host memory — every
+  batched job piling up there could collide with the 6 GB cgroup cap
+  from another angle. The cache_dir is bind-mounted to a real volume
+  so the bytes never spill into RAM.
+
+- **asyncio default executor capped at 4 workers** in
+  `app/main.py:lifespan`. Python defaults the thread pool to
+  `min(32, os.cpu_count() + 4)` — on a 16-core host that's 20. With the
+  cgroup `cpus: "4.0"` cap, an HTMX poll burst could spawn ~20 threads
+  each running OMP-parallel torch/numpy and blow past the CPU
+  allocation. The job lock already serializes the heavy pipeline; this
+  cap protects the sync FastAPI handlers that aren't gated by it.
+
+- **Settings persistence uses copy-on-write.** `update()` / `reset()` /
+  `reset_all()` now build a NEW dict and rebind `self._overrides`
+  atomically rather than mutating it in place. A concurrent reader
+  doing `settings.whisper_model` sees either the pre-update or
+  post-update snapshot — never a half-applied state. Atomic rebind +
+  the existing `os.replace` write give a clean memory + on-disk
+  consistency guarantee.
+
+- **LLM clients constructed with `max_retries=0`.** The Anthropic and
+  OpenAI SDKs both default to silent transparent retries (2 per call,
+  each paying the full 300 s timeout). On a wedged backend that
+  multiplies into ~15 min per call, which would blow the 90 min
+  job-level deadline budget on a single batch. We'd rather see fast
+  failures here and let the higher level decide whether to retry.
+
+- **Plex section cache gained a 1-hour TTL.** Previously the
+  module-level cache was effectively forever — an operator who renamed
+  a Plex library section needed a container restart to see the change.
+  TTL lets the change land within an hour without restart.
+
+- **httpx timeouts bumped 30 s → 60 s** on the Emby/Jellyfin and Plex
+  clients. Real deployments with 100 k+ items on slow storage hit
+  ReadTimeout on Library page renders at 30 s.
+
+- **Subprocess timeouts added** to every ffmpeg / ffprobe /
+  mkvpropedit call (audio extract: 60 min, frame extract: 30 s,
+  ffprobe / mkvpropedit: 30-60 s). The job-level deadline is still the
+  real fence; subprocess timeouts are defense-in-depth so a single
+  wedged invocation doesn't park the worker for the full job timeout.
+
 ### Added — P2 hardening (review items 14-35)
 
 A correctness/hygiene sweep across the code-review items that didn't make

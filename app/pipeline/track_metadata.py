@@ -90,8 +90,9 @@ def _audio_position(media_path: Path, absolute_index: int) -> int | None:
                 str(media_path),
             ],
             capture_output=True, text=True, check=True,
+            timeout=30,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return None
     streams = json.loads(proc.stdout or "{}").get("streams", [])
     for i, s in enumerate(streams):
@@ -119,10 +120,18 @@ def _write_mkv(media_path: Path, audio_pos: int, iso6392: str) -> None:
                 "--set", f"language={iso6392}",
             ],
             capture_output=True, text=True,
+            # mkvpropedit edits only the EBML header — sub-second on any
+            # healthy file. 60 s is a generous deadline for the
+            # network-mount-flaked-during-write edge case.
+            timeout=60,
         )
     except FileNotFoundError as e:
         raise MetadataWriteError(
             "mkvpropedit not installed (need mkvtoolnix-cli)"
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise MetadataWriteError(
+            f"mkvpropedit timed out after 60s on {media_path}"
         ) from e
     if proc.returncode != 0:
         raise MetadataWriteError(

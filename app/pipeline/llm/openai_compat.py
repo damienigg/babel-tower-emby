@@ -39,10 +39,15 @@ class OpenAICompatLLM:
             raise LLMError("OpenAI-compat base URL is not set")
         # Many local servers (Ollama, LocalAI) don't authenticate; the SDK
         # still requires a non-empty key, so substitute a placeholder.
+        # max_retries=0 matches the Anthropic client — the OpenAI SDK
+        # defaults to 2 transparent retries which can multiply our
+        # per-call timeout into something that blows the job deadline.
+        # We'd rather see fast failures.
         self._client = openai.OpenAI(
             base_url=base_url.rstrip("/"),
             api_key=api_key or "not-required",
             timeout=_LLM_TIMEOUT_SECONDS,
+            max_retries=0,
         )
         self._model = model
         self._supports_vision = supports_vision

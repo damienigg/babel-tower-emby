@@ -44,6 +44,9 @@ from typing import Callable
 
 from app.config import settings
 from app.pipeline.openvino_introspect import log_selected_device
+from app.pipeline.packing import (
+    RegionEntry, Window, plan_packed_windows, remap_cue_to_original,
+)
 from app.pipeline.stt import Cue, TranscriptionResult
 from app.pipeline.vad import detect_speech, plan_chunks
 
@@ -165,17 +168,27 @@ def transcribe(
 ) -> TranscriptionResult:
     """Transcribe `audio_path` (a 16 kHz mono WAV) via OpenVINO Whisper.
 
-    Audio is processed in N-second SEGMENTS rather than as one big in-RAM
-    buffer (see `settings.stt_audio_segment_seconds`). This keeps peak
-    audio RAM bounded — for a 2 h film with the default 600 s segment
-    size, ~75 MB of float32 audio is resident at any moment instead of
-    ~500 MB. Each segment is independently VAD-filtered and chunked, then
-    discarded before the next segment is read.
+    Streaming + segmentation + packing layout (default config):
 
-    The trade-off is that words straddling a segment boundary may split
-    into two cues (one per segment). With the default 600 s segments and
-    typical film durations, that's at most ~10 boundaries — acceptable for
-    v1; tunable via `BABEL_STT_AUDIO_SEGMENT_SECONDS` if needed.
+    1. **Segmentation**: audio is read in N-second segments (default 600 s).
+       Peak audio RAM stays bounded — ~75 MB resident at any moment for
+       16 kHz mono float32, instead of ~500 MB for the entire 2 h film.
+
+    2. **Forward overlap**: each segment read pulls an extra
+       `stt_segment_overlap_seconds` (default 30 s) past the segment
+       boundary. Speech regions straddling the boundary are processed
+       fully in segment N; segment N+1 skips ahead to where N stopped.
+       Eliminates split-word artifacts at boundaries.
+
+    3. **Region packing**: short speech regions (the typical 3-10 s
+       dialog utterance) are packed into shared 30 s decoder windows with
+       brief silence pads between. Whisper sees them as distinct segments
+       and emits cues with window-relative timestamps; we demultiplex
+       back to original-audio timestamps via each window's region_map.
+       Cuts iGPU compute 1.5-3× on dialog-heavy films vs. the previous
+       one-region-per-chunk approach. Toggle via `stt_region_packing`.
+
+    All three stages preserve cue timestamps as original-audio seconds.
     """
     import numpy as np
     import soundfile as sf
@@ -186,9 +199,34 @@ def transcribe(
     )
     check_cancel()
 
-    # Open the file once, read the metadata, then stream segment-by-segment
-    # below. We do NOT slurp the full audio into RAM here — that's the
-    # whole point of the streaming refactor.
+    segment_seconds = max(60, int(settings.stt_audio_segment_seconds or 600))
+    segment_samples = segment_seconds * _SAMPLE_RATE
+    overlap_seconds = max(0, int(settings.stt_segment_overlap_seconds or 0))
+    overlap_samples = overlap_seconds * _SAMPLE_RATE
+    packing_enabled = bool(settings.stt_region_packing)
+
+    # ── decoder kwargs (constant across windows) ─────────────────────────
+    # Force language + task once so each window's generate() call uses
+    # the same prompt, regardless of optimum-intel kwarg quirks.
+    generate_kwargs: dict = {"return_timestamps": True}
+    if language_hint:
+        try:
+            forced = processor.get_decoder_prompt_ids(
+                language=language_hint, task="transcribe", no_timestamps=False,
+            )
+            generate_kwargs["forced_decoder_ids"] = forced
+        except Exception as e:
+            _log.warning(
+                "could not build forced_decoder_ids for language=%r (%s); "
+                "letting Whisper auto-detect", language_hint, e,
+            )
+
+    batch_size = _BATCH_BY_MODEL.get(settings.whisper_model, _DEFAULT_BATCH)
+
+    cues: list[Cue] = []
+    next_id = 0
+    detected_lang: str | None = None
+
     with sf.SoundFile(str(audio_path)) as snd:
         if snd.samplerate != _SAMPLE_RATE:
             raise RuntimeError(
@@ -196,132 +234,221 @@ def transcribe(
             )
         total_frames = snd.frames
         total_audio_seconds = total_frames / _SAMPLE_RATE
-
-        segment_seconds = max(60, int(settings.stt_audio_segment_seconds or 600))
-        segment_samples = segment_seconds * _SAMPLE_RATE
-        n_segments = max(1, math.ceil(total_frames / segment_samples))
         _log.info(
-            "STT segmentation: %.1fs total audio → %d segment(s) of up to %ds",
-            total_audio_seconds, n_segments, segment_seconds,
+            "STT streaming: %.1fs total audio | segment=%ds overlap=%ds packing=%s",
+            total_audio_seconds, segment_seconds, overlap_seconds, packing_enabled,
         )
 
-        # ── decoder kwargs (constant across segments) ─────────────────────
-        # Force language + task once so each segment's generate() call uses
-        # the same prompt, regardless of optimum-intel kwarg quirks.
-        generate_kwargs: dict = {"return_timestamps": True}
-        if language_hint:
-            try:
-                forced = processor.get_decoder_prompt_ids(
-                    language=language_hint, task="transcribe", no_timestamps=False,
-                )
-                generate_kwargs["forced_decoder_ids"] = forced
-            except Exception as e:
-                _log.warning(
-                    "could not build forced_decoder_ids for language=%r (%s); "
-                    "letting Whisper auto-detect", language_hint, e,
-                )
+        file_pos = 0   # next read position in samples (absolute, in source audio)
+        segment_idx = 0
+        # Approximate progress denominator. We use ceil(total / segment) as
+        # an upper bound; if cross-segment merging makes us consume more
+        # than segment_samples per iteration we'll converge faster than the
+        # bar suggests, which is fine.
+        n_segments_est = max(1, math.ceil(total_frames / segment_samples))
 
-        batch_size = _BATCH_BY_MODEL.get(settings.whisper_model, _DEFAULT_BATCH)
-
-        cues: list[Cue] = []
-        next_id = 0
-        detected_lang: str | None = None
-        # Total chunks across segments (denominator for progress reporting).
-        # We don't know this upfront — we report progress as
-        # (segment_index + intra_segment_fraction) / n_segments instead, so
-        # the bar advances smoothly across the whole transcription pass.
-
-        for segment_idx in range(n_segments):
+        while file_pos < total_frames:
             check_cancel()
 
-            # snd.read advances the file pointer; we read up to
-            # segment_samples and let soundfile return whatever's left at
-            # EOF. dtype=float32 avoids a second copy from int16.
-            seg_audio = snd.read(frames=segment_samples, dtype="float32")
+            # Seek to the next un-processed position. snd.seek + read keeps
+            # us in O(1) per segment with no buffer-in-memory growth.
+            snd.seek(file_pos)
+            seg_audio = snd.read(
+                frames=segment_samples + overlap_samples, dtype="float32",
+            )
             if seg_audio.size == 0:
-                # Defensive — shouldn't happen given total_frames, but if
-                # the file is shorter than reported (mismatched header),
-                # bail out cleanly.
                 break
-            seg_offset_seconds = (segment_idx * segment_samples) / _SAMPLE_RATE
+            seg_offset_seconds = file_pos / _SAMPLE_RATE
+            seg_length_samples = len(seg_audio)
+            # The "main" portion is the first segment_samples of this read.
+            # The trailing overlap_samples is there so a region straddling
+            # the boundary can be captured fully without a re-read on the
+            # next iteration.
+            main_end_in_seg = min(segment_samples, seg_length_samples)
 
-            # ── VAD over THIS SEGMENT only ──────────────────────────────
-            # Keeps the torch tensor allocation bounded to one segment of
-            # audio (~75 MB at 600 s). Without VAD we still segment, just
-            # treating the whole segment as one big speech region.
+            # ── VAD over the segment + overlap window ───────────────────
             if settings.vad_enabled:
-                seg_speech_regions = detect_speech(seg_audio, _SAMPLE_RATE)
-                if not seg_speech_regions:
-                    progress((segment_idx + 1) / n_segments)
-                    continue
+                speech_regions = detect_speech(seg_audio, _SAMPLE_RATE)
             else:
-                seg_speech_regions = [(0, len(seg_audio))]
+                speech_regions = [(0, seg_length_samples)]
 
-            seg_chunks = plan_chunks(seg_speech_regions, _CHUNK_SAMPLES, _SAMPLE_RATE)
-            n_seg_chunks = len(seg_chunks)
-            if n_seg_chunks == 0:
-                progress((segment_idx + 1) / n_segments)
+            # Decide where this segment ends and the next one starts:
+            #   - Process all regions that BEGIN before main_end_in_seg.
+            #   - For regions that straddle main_end_in_seg (start < main_end
+            #     <= end), extend the consumption to the region's end so the
+            #     full utterance is decoded here.
+            #   - Regions that start at-or-after main_end_in_seg are deferred
+            #     to the next iteration (next file_pos lands at their start
+            #     via overlap reuse).
+            consumed_samples = main_end_in_seg
+            processable_regions: list[tuple[int, int]] = []
+            for r_start, r_end in speech_regions:
+                if r_start >= main_end_in_seg:
+                    # Entirely in the overlap zone — defer to next segment.
+                    break
+                # Region starts before main_end_in_seg.
+                processable_regions.append((r_start, r_end))
+                if r_end > consumed_samples:
+                    consumed_samples = r_end
+
+            # Cap consumed_samples at the read length — we don't have data
+            # past it. If a region's end was truncated by the read window,
+            # the next iteration will see what's left of it (the file_pos
+            # advance below stops at consumed_samples, so the region's
+            # leftover sits at the very start of the next read).
+            consumed_samples = min(consumed_samples, seg_length_samples)
+
+            # The last segment of the file (file_pos + consumed_samples >=
+            # total_frames) needs to also process regions that start in
+            # the overlap zone — they're not "deferred" because there's
+            # nowhere to defer them TO. Re-add anything we skipped.
+            at_eof = (file_pos + consumed_samples) >= total_frames
+            if at_eof:
+                for r_start, r_end in speech_regions:
+                    if (r_start, r_end) in processable_regions:
+                        continue
+                    processable_regions.append((r_start, r_end))
+                consumed_samples = seg_length_samples
+
+            if not processable_regions:
+                # All-silence segment. Advance and continue.
+                file_pos += consumed_samples
+                segment_idx += 1
+                progress(min(1.0, file_pos / total_frames))
                 continue
-            speech_seconds = sum(e - s for s, e in seg_speech_regions) / _SAMPLE_RATE
-            seg_audio_seconds = len(seg_audio) / _SAMPLE_RATE
+
+            speech_seconds_in_seg = sum(
+                e - s for s, e in processable_regions
+            ) / _SAMPLE_RATE
             _log.info(
-                "STT segment %d/%d: %d speech regions, %.1fs of %.1fs (%d%%); %d chunks",
-                segment_idx + 1, n_segments,
-                len(seg_speech_regions), speech_seconds, seg_audio_seconds,
-                round(100 * speech_seconds / max(seg_audio_seconds, 1e-9)), n_seg_chunks,
+                "STT segment %d (offset=%.1fs): %d region(s), %.1fs speech of "
+                "%.1fs consumed",
+                segment_idx + 1, seg_offset_seconds,
+                len(processable_regions), speech_seconds_in_seg,
+                consumed_samples / _SAMPLE_RATE,
             )
 
-            for batch_start in range(0, n_seg_chunks, batch_size):
-                check_cancel()
-                batch_end = min(batch_start + batch_size, n_seg_chunks)
-                batch = seg_chunks[batch_start:batch_end]
+            # ── Plan windows ─────────────────────────────────────────────
+            if packing_enabled:
+                windows = plan_packed_windows(
+                    processable_regions, _CHUNK_SAMPLES,
+                )
+            else:
+                # Backward-compatible single-region-per-window mode (the
+                # escape hatch for users who hit a region-packing
+                # regression on a specific film).
+                windows = _windows_from_simple_chunks(
+                    processable_regions, _CHUNK_SAMPLES,
+                )
 
-                # Each chunk is exactly 30s of float32 audio. Region tails
-                # shorter than 30s are zero-padded — VAD has already trimmed
-                # surrounding silence so the speech anchors the decoder;
-                # the pad has no semantic content.
-                batch_chunks: list = []
-                for chunk in batch:
-                    audio_slice = seg_audio[chunk.start_sample:chunk.end_sample]
-                    if len(audio_slice) < _CHUNK_SAMPLES:
-                        audio_slice = np.pad(
-                            audio_slice, (0, _CHUNK_SAMPLES - len(audio_slice))
-                        )
-                    batch_chunks.append(audio_slice)
+            n_windows = len(windows)
+            if n_windows == 0:
+                file_pos += consumed_samples
+                segment_idx += 1
+                progress(min(1.0, file_pos / total_frames))
+                continue
+
+            for batch_start in range(0, n_windows, batch_size):
+                check_cancel()
+                batch_end = min(batch_start + batch_size, n_windows)
+                batch = windows[batch_start:batch_end]
+
+                batch_audio: list = []
+                for win in batch:
+                    batch_audio.append(_build_window_audio(seg_audio, win, np))
 
                 features = processor.feature_extractor(
-                    batch_chunks, sampling_rate=_SAMPLE_RATE, return_tensors="pt",
+                    batch_audio, sampling_rate=_SAMPLE_RATE, return_tensors="pt",
                 )
                 token_ids = model.generate(features.input_features, **generate_kwargs)
 
-                for k, chunk in enumerate(batch):
+                for k, win in enumerate(batch):
                     decoded = processor.tokenizer.decode(
                         token_ids[k], skip_special_tokens=False,
                         decode_with_timestamps=True,
                     )
-                    # chunk.orig_offset_s is segment-relative; add the
-                    # segment's own offset to get original-audio-relative
-                    # cue timestamps.
-                    global_offset = chunk.orig_offset_s + seg_offset_seconds
-                    for start, end, text in _parse_segments(decoded, global_offset):
-                        cues.append(Cue(id=next_id, start=start, end=end, text=text))
+                    # Parse with offset=0 to get window-relative cues; we
+                    # remap each cue through the window's region_map below.
+                    for win_start, win_end, text in _parse_segments(decoded, 0.0):
+                        mapped = remap_cue_to_original(
+                            win_start, win_end, win.region_map, _SAMPLE_RATE,
+                        )
+                        if mapped is None:
+                            # Cue fell in a pad zone (silence between packed
+                            # regions) — Whisper hallucinated, drop it.
+                            continue
+                        orig_start, orig_end = mapped
+                        cues.append(Cue(
+                            id=next_id,
+                            start=orig_start,
+                            end=orig_end,
+                            text=text,
+                        ))
                         next_id += 1
                     if detected_lang is None:
                         m = _LANG_TOKEN_RE.search(decoded)
                         if m:
                             detected_lang = m.group(1)
 
-                # Smooth progress: position within this segment + segment index.
-                intra = batch_end / n_seg_chunks
-                progress((segment_idx + intra) / n_segments)
+                # Smooth progress: anchor at file_pos, advance fractionally
+                # within this segment's consumption.
+                intra_frac = batch_end / n_windows
+                progress_pos = file_pos + intra_frac * consumed_samples
+                progress(min(1.0, progress_pos / total_frames))
 
-            # Free the segment buffer before reading the next one. CPython
-            # reference counting drops it as soon as we rebind on the next
-            # iteration, but explicit deletion makes the intent clear and
-            # avoids any short-lived overlap when the next read allocates.
             del seg_audio
+            file_pos += consumed_samples
+            segment_idx += 1
 
+    progress(1.0)
     return TranscriptionResult(
         detected_language=language_hint or detected_lang or "en",
         cues=cues,
     )
+
+
+def _build_window_audio(seg_audio, win: Window, np_mod) -> "np.ndarray":
+    """Concatenate the audio slices for a window, with silence pads
+    between, and zero-pad the tail to exactly _CHUNK_SAMPLES so Whisper's
+    feature extractor (which is strict on length) accepts it."""
+    parts: list = []
+    for i, (s, e) in enumerate(win.audio_slices):
+        if i > 0 and win.pad_samples_between > 0:
+            parts.append(np_mod.zeros(win.pad_samples_between, dtype=np_mod.float32))
+        parts.append(seg_audio[s:e])
+    arr = np_mod.concatenate(parts) if len(parts) > 1 else parts[0]
+    if len(arr) < _CHUNK_SAMPLES:
+        arr = np_mod.pad(arr, (0, _CHUNK_SAMPLES - len(arr)))
+    elif len(arr) > _CHUNK_SAMPLES:
+        arr = arr[:_CHUNK_SAMPLES]
+    return arr
+
+
+def _windows_from_simple_chunks(
+    speech_regions: list[tuple[int, int]],
+    chunk_samples: int,
+) -> list[Window]:
+    """Fallback planner used when settings.stt_region_packing is False.
+    Each speech region becomes one or more Windows of size chunk_samples
+    (zero-padded if shorter). Single-region windows have a trivial
+    region_map identical to the old plan_chunks output, so cue timestamps
+    flow through remap_cue_to_original cleanly."""
+    out: list[Window] = []
+    for r_start, r_end in speech_regions:
+        if r_end <= r_start:
+            continue
+        j = 0
+        while j * chunk_samples < (r_end - r_start):
+            slice_start = r_start + j * chunk_samples
+            slice_end = min(r_end, slice_start + chunk_samples)
+            out.append(Window(
+                audio_slices=[(slice_start, slice_end)],
+                pad_samples_between=0,
+                region_map=[RegionEntry(
+                    window_offset_samples=0,
+                    original_start_samples=slice_start,
+                    length_samples=slice_end - slice_start,
+                )],
+            ))
+            j += 1
+    return out

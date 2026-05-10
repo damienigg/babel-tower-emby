@@ -29,6 +29,14 @@ import subprocess
 # pathological streams.
 _ACCURATE_SEEK_PRE_ROLL = 5.0
 
+# Hard cap on how long one frame extraction can take. ffmpeg-fast-seek
+# on a healthy file completes in well under 1 s; accurate-seek decodes
+# ~5 s of video so still typically <3 s. 30 s is a generous timeout
+# for a wedged ffmpeg (network mount drop, corrupt index) — the job-
+# level deadline is the real fence, this is just defense-in-depth so
+# a single bad frame doesn't park the worker for the full job timeout.
+_FRAME_EXTRACT_TIMEOUT_SECONDS = 30
+
 
 def _scale_filter(max_size: int) -> str:
     """Long-edge-N scale filter (max_size px on whichever side is longer,
@@ -84,5 +92,6 @@ def extract_frame_bytes(
          "-vcodec", "mjpeg",
          "-"],
         capture_output=True, check=True,
+        timeout=_FRAME_EXTRACT_TIMEOUT_SECONDS,
     )
     return result.stdout

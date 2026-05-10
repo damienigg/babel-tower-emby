@@ -381,18 +381,29 @@ def _build_context(
             # erroring. The translator just won't have visual context.
             return TranslationContext()
 
-        keyframes: dict[int, bytes] = {}
-        for scene in scene_list:
-            check_cancel()
-            ts = scenes.keyframe_timestamp(scene, settings.scene_keyframe_position)
-            try:
-                keyframes[scene.index] = frames.extract_frame_bytes(
-                    req.media_path, ts, settings.scene_frame_max_size
-                )
-            except subprocess.CalledProcessError:
-                continue
+        # Lazy keyframe extraction (same pattern as cinematic cue_frames).
+        # Previously we pre-extracted ALL scene keyframes upfront into a
+        # dict held through the entire 5-15 min bible build — for the
+        # default 500 scenes × 250 KB JPEGs that's ~125 MB resident. With
+        # the provider, each LLM batch (scene_bible_batch_size=10 by
+        # default) extracts and releases its frames inline, so peak RAM
+        # for this stage drops to ~2.5 MB.
+        media_path = req.media_path
+        frame_max = settings.scene_frame_max_size
+        keyframe_position = settings.scene_keyframe_position
 
-        scene_bible.describe_scenes(scene_list, keyframes, check_cancel=check_cancel)
+        def _scene_keyframe_provider(scene) -> bytes | None:
+            ts = scenes.keyframe_timestamp(scene, keyframe_position)
+            try:
+                return frames.extract_frame_bytes(media_path, ts, frame_max)
+            except subprocess.CalledProcessError:
+                return None   # one missing frame doesn't doom the bible
+
+        scene_bible.describe_scenes(
+            scene_list,
+            keyframe_provider=_scene_keyframe_provider,
+            check_cancel=check_cancel,
+        )
         scene_bible.store_cached_bible(fp, scene_list)
         bible = scene_list
 

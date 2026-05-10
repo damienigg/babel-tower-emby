@@ -339,6 +339,8 @@ All configurable from the Settings UI; these env vars only matter for declarativ
 | `BABEL_CACHE_DIR` | `/cache` | Cache directory |
 | `BABEL_JOB_TIMEOUT_SECONDS` | `5400` | Wall-clock cap per job; `0` disables |
 | `BABEL_STT_AUDIO_SEGMENT_SECONDS` | `600` | OpenVINO STT audio-segment size (RAM cap knob) |
+| `BABEL_STT_SEGMENT_OVERLAP_SECONDS` | `30` | Forward overlap on segment reads so straddling regions stay intact |
+| `BABEL_STT_REGION_PACKING` | `true` | Pack short speech regions into shared 30 s decoder windows (perf) |
 | `BABEL_CINEMATIC_MAX_CUES_WITH_FRAMES` | `800` | Hard cap on cues that get a per-cue frame; `0` disables cinematic frames |
 | `BABEL_AUTH_CREDENTIALS` | (unset) | `user:password` for HTTP Basic auth; unset = no auth |
 
@@ -349,7 +351,7 @@ pip install -e .[dev]
 pytest
 ```
 
-235 tests covering pure-logic (language normalization, VTT formatting, track selection, scene mapping, settings store with migrations + atomic writes + corrupt-file recovery, batching, cache key invalidation, two-level cache fingerprint, Emby/Jellyfin payload parsing, Plex API translation, LLM translation provider edge cases including lazy cinematic-frame plumbing, UI form coercion, job deadline enforcement) plus FastAPI smoke tests for every route and the auth + same-origin middleware. Heavy externals (ffmpeg, Whisper, LLM/server APIs) are stubbed — the suite runs in ~5s.
+255 tests covering pure-logic (language normalization, VTT formatting, track selection, scene mapping, settings store with migrations + atomic writes + corrupt-file recovery, batching, cache key invalidation, two-level cache fingerprint, Emby/Jellyfin payload parsing, Plex API translation, LLM translation provider edge cases including lazy cinematic-frame plumbing, UI form coercion, job deadline enforcement) plus FastAPI smoke tests for every route and the auth + same-origin middleware. Heavy externals (ffmpeg, Whisper, LLM/server APIs) are stubbed — the suite runs in ~5s.
 
 ## Layout
 
@@ -393,6 +395,7 @@ subtitle-this/
         ├── stt.py
         ├── stt_faster_whisper.py
         ├── stt_openvino.py
+        ├── packing.py                  Speech-region packer (multi-region 30s windows)
         ├── scenes.py
         ├── frames.py
         ├── scene_bible.py

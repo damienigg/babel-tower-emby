@@ -18,7 +18,20 @@ class AnthropicLLM:
     def __init__(self, *, api_key: str, model: str) -> None:
         if not api_key:
             raise LLMError("Anthropic API key is not set")
-        self._client = anthropic.Anthropic(api_key=api_key, timeout=_LLM_TIMEOUT_SECONDS)
+        # max_retries=0: the Anthropic SDK retries transient errors (5xx,
+        # connection drops) up to 2 times by default — each retry pays
+        # the full `timeout` again, so a wedged backend can consume up to
+        # 3 × 300 s = 15 min per chat() call. That would shred our
+        # job-level wall-clock deadline (default 5400 s = 90 min) on a
+        # single batch. We'd rather see fast failures here and let the
+        # caller decide whether the higher-level job should retry. The
+        # job-level deadline is the floor; the LLM call timeout is the
+        # ceiling we control directly.
+        self._client = anthropic.Anthropic(
+            api_key=api_key,
+            timeout=_LLM_TIMEOUT_SECONDS,
+            max_retries=0,
+        )
         self._model = model
 
     def supports_vision(self) -> bool:

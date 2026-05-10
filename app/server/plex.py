@@ -35,6 +35,7 @@ lang.normalize() so MediaItem.has_subtitle_track works identically for
 Emby/Jellyfin and Plex.
 """
 import threading
+import time
 from typing import Any
 
 import httpx
@@ -53,10 +54,16 @@ from app.server.base import (
 # (base_url, token). PlexClient is constructed fresh per request in
 # manage.py:media_server_client(), so a per-instance cache (which the
 # previous implementation had) was always cold. The section list is
-# small (a handful of entries) and rarely changes — caching at module
-# scope means subsequent requests skip the /library/sections roundtrip.
-# Lock guards the dict against concurrent first-time-write races.
-_VIDEO_SECTIONS_CACHE: dict[tuple[str, str], list[tuple[str, int]]] = {}
+# small (a handful of entries) and changes only when an operator adds/
+# removes/renames a library — caching at module scope means subsequent
+# requests skip the /library/sections roundtrip.
+#
+# Each cache entry carries a wall-clock expiry: 1 hour. Long enough for
+# the typical use case (browse Library page, queue a few jobs, walk
+# away) to amortize the lookup, short enough that an operator's library
+# changes are visible without a container restart.
+_VIDEO_SECTIONS_TTL_SECONDS = 3600
+_VIDEO_SECTIONS_CACHE: dict[tuple[str, str], tuple[float, list[tuple[str, int]]]] = {}
 _VIDEO_SECTIONS_LOCK = threading.Lock()
 
 
@@ -97,12 +104,15 @@ class PlexClient(MediaServerClient):
         # accessing the server by LAN IP over HTTPS fails verification by
         # default. Users on that setup should toggle "Verify SSL" off in
         # Settings (passes verify_ssl=False here).
+        # 60 s timeout: large Plex servers (50 k+ episodes) can take a
+        # while to serve /library/sections/N/all on slow storage. 30 s
+        # was too tight on real deployments.
         self._http = httpx.Client(
             headers={
                 "X-Plex-Token": token,
                 "Accept": "application/json",
             },
-            timeout=30.0,
+            timeout=60.0,
             verify=verify_ssl,
         )
         # Token serves as the cache key alongside base_url so different
@@ -253,9 +263,11 @@ class PlexClient(MediaServerClient):
         complexity here.
         """
         cache_key = (self._base, self._token)
-        cached = _VIDEO_SECTIONS_CACHE.get(cache_key)
-        if cached is not None:
-            return cached
+        entry = _VIDEO_SECTIONS_CACHE.get(cache_key)
+        if entry is not None:
+            cached_at, cached = entry
+            if time.time() - cached_at < _VIDEO_SECTIONS_TTL_SECONDS:
+                return cached
         r = self._http.get(f"{self._base}/library/sections")
         if r.status_code != 200:
             raise MediaServerError(
@@ -270,7 +282,7 @@ class PlexClient(MediaServerClient):
             if video_type is not None and key is not None:
                 pairs.append((str(key), video_type))
         with _VIDEO_SECTIONS_LOCK:
-            _VIDEO_SECTIONS_CACHE[cache_key] = pairs
+            _VIDEO_SECTIONS_CACHE[cache_key] = (time.time(), pairs)
         return pairs
 
     def _section_page(
