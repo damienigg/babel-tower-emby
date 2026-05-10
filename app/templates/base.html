@@ -111,6 +111,17 @@
       font-size: 0.78em;
       color: var(--pico-muted-color);
     }
+    /* When `.elapsed-time` sits INSIDE `.progress-label` it reads as part
+       of the bar overlay text. Inherit color + size from the label and
+       drop the standalone margin so it lines up cleanly next to "65%"
+       and the stage name. tabular-nums stays so the second-counter
+       doesn't wiggle the surrounding text on each tick. */
+    .progress-label .elapsed-time {
+      font-size: inherit;
+      color: inherit;
+      margin: 0;
+      letter-spacing: 0;
+    }
     .col-progress { width: 12rem; }
     .cancel-job-btn {
       padding: 0.15rem 0.5rem !important;
@@ -314,7 +325,7 @@
     .batch-items-table th.col-name      { width: auto; }
     .batch-items-table th.col-target-lang { width: 12rem; }
     .batch-items-table th.col-mode      { width: 8rem; }
-    .batch-items-table th.col-status    { width: 7rem; }
+    .batch-items-table th.col-status    { width: 9rem; }
     .batch-items-table th.col-remove    { width: 2.5rem; }
     .batch-items-table td.col-name {
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

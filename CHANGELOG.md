@@ -7,6 +7,31 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-05-10
+
+UI cosmetics: the per-job elapsed-time counter now sits INSIDE the
+progress bar overlay, next to "65%" and the stage name, instead of on
+its own line below the bar. Reads as one unit ("1m 32s · 65% ·
+transcribing") and frees the row height for more dense job tables.
+
+### Changed
+
+- `_jobs_table.html` (dashboard): elapsed-time merged into the
+  progress-label for running/canceling jobs. For terminal states
+  (succeeded/canceled) the elapsed is inlined alongside the status
+  word in the same label ("100% · 1m 32s", "canceled · after 1m 32s").
+- `library.html` per-row batch progress: same treatment. Row width
+  bumped 7rem → 8rem to accommodate the combined text; status column
+  widened 7rem → 9rem.
+- `base.html` adds a `.progress-label .elapsed-time` CSS rule so the
+  nested element inherits the label's color and size, with
+  tabular-nums kept so seconds don't jitter the surrounding text.
+
+The global elapsed-time ticker in base.html is unchanged — it queries
+`.elapsed-time[data-elapsed-base]` regardless of DOM position and
+updates only the inner element's textContent, so the surrounding
+"· 65% · transcribing" stays put while seconds tick up.
+
 ## [0.6.1] — 2026-05-10
 
 Build-environment hygiene. Both image flavors now run Python 3.12.

@@ -49,6 +49,48 @@ def test_version_renders_in_page_footer(client):
     assert f"v{__version__}" in r.text
 
 
+def test_running_job_elapsed_is_inside_progress_label(client):
+    """The 0.6.2 cosmetic moved the elapsed-time counter INSIDE the
+    progress bar overlay (alongside `· 65% · transcribing`) instead of
+    rendering on its own line below the bar. This test injects a fake
+    running job and asserts the new DOM structure so a future template
+    refactor can't silently put the counter back outside the bar."""
+    import time
+    from app import jobs
+    from app.jobs import Job
+
+    fake = Job(
+        id="testlbl1234", item_id="x", item_name="LabelTest",
+        target_lang="fr", provider="nllb", mode="audio",
+        status="running",
+        progress_pct=42.0,
+        progress_stage="transcribing",
+        started_at=time.time() - 30.0,
+    )
+    jobs._jobs[fake.id] = fake
+    try:
+        r = client.get("/partials/jobs")
+        assert r.status_code == 200
+        body = r.text
+        # The elapsed-time span must sit INSIDE the progress-label, NOT
+        # as a sibling div underneath the progress-wrap. The simplest
+        # structural assertion: an opening <span class="progress-label">
+        # is followed (before its closing </span>) by an
+        # <span class="elapsed-time" ...>. We don't try to parse HTML —
+        # a regex hit confirms the nesting order.
+        import re
+        m = re.search(
+            r'<span class="progress-label">\s*<span class="elapsed-time"',
+            body,
+        )
+        assert m is not None, (
+            "elapsed-time is no longer nested inside progress-label — the "
+            "0.6.2 cosmetic regressed. Body around the cell:\n" + body[:800]
+        )
+    finally:
+        jobs._jobs.pop(fake.id, None)
+
+
 def test_settings_page_renders_with_cost_ladder(client):
     """The HTML settings page must render without errors and surface the
     cost-ladder hero + per-section descriptions that guide users from the
