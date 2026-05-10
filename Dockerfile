@@ -1,4 +1,8 @@
-FROM python:3.11-slim
+# Python 3.12 to match the OpenVINO flavor (Dockerfile.openvino uses
+# Ubuntu 24.04's system 3.12). Kept in lockstep so behavior is identical
+# across both image flavors — saves "works on CPU image but not openvino"
+# class of bugs that comes from interpreter drift between the two.
+FROM python:3.12-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates mkvtoolnix \

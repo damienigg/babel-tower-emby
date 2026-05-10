@@ -1,4 +1,14 @@
-FROM openvino/ubuntu22_runtime:2025.4.1
+# Ubuntu 24.04 LTS base — system Python is 3.12 (vs 3.10 on the older
+# ubuntu22_runtime). OpenVINO 2025.4.1 runtime is identical between the
+# two; only the host OS + interpreter differ. Reasons to be on 3.12:
+# - Security support through October 2028 (3.10 EOLs October 2026).
+# - Faster CPython: ~10-15% pure-Python speedup vs 3.10 (modest in our
+#   workload since most wall-clock is in torch/OpenVINO C++, but it's
+#   free and compounds across uvicorn + transformers + our own code).
+# - Better error messages (PEP 657 fine-grained tracebacks).
+# - PEP 695 generic types, exception groups, finer dict/set perf.
+# pyproject.toml's requires-python is bumped to >=3.12 to match.
+FROM openvino/ubuntu24_runtime:2025.4.1
 
 USER root
 

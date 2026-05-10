@@ -7,6 +7,49 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-05-10
+
+Build-environment hygiene. Both image flavors now run Python 3.12.
+
+### Changed
+
+- **OpenVINO image base** bumped from `openvino/ubuntu22_runtime:2025.4.1`
+  (Ubuntu 22.04 + Python 3.10) to `openvino/ubuntu24_runtime:2025.4.1`
+  (Ubuntu 24.04 + Python 3.12). Same OpenVINO runtime; newer interpreter.
+- **CPU image base** bumped from `python:3.11-slim` to `python:3.12-slim`
+  so both flavors are in lockstep on the same interpreter version.
+- **`pyproject.toml` `requires-python` bumped to `>=3.12`** — was
+  previously `>=3.11` which was a lie because the openvino image was
+  running 3.10. The two are now consistent and accurate.
+- **Dockerfile fix from earlier today**: `torchaudio` installed from
+  the CPU wheel index alongside `torch` so silero-vad's transitive
+  dependency doesn't pull an ABI-incompatible CUDA-build wheel. (Was
+  shipped as a hotfix between 0.6.0 and 0.6.1.)
+
+### Why 3.12
+
+- Security support through **October 2028** (3.10 EOLs October 2026).
+- ~10-15% faster pure-Python execution from the "Faster CPython"
+  project (3.11) + per-interpreter improvements (3.12). Modest in our
+  workload since most wall-clock is in torch/OpenVINO/ffmpeg C++,
+  but it's free and compounds.
+- PEP 657 fine-grained tracebacks point at the exact subexpression
+  on errors — saves time when debugging in `docker logs`.
+- Better dict/set perf, faster startup, smaller per-interpreter
+  baseline RAM.
+
+### Validated dependencies
+
+All Python deps have official 3.12 wheels:
+- `torch` / `torchaudio` (CPU index): since 2.2 (we're on 2.5+).
+- `transformers`, `optimum-intel[openvino]`: yes (for years).
+- `faster-whisper`, `silero-vad`, `sentencepiece`, `soundfile`: yes.
+- `fastapi`, `uvicorn[standard]`, `pydantic`, `httpx`, `jinja2`,
+  `anthropic`, `openai`: all 3.12-clean.
+
+No code changes were required to support 3.12 — we don't use any
+3.10-or-3.11-only syntax.
+
 ## [0.6.0] — 2026-05-10
 
 The performance-within-safety release. Headline: **STT region packing**
