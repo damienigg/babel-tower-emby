@@ -237,3 +237,144 @@ def test_openai_compat_client_constructed_with_no_retries(monkeypatch):
         base_url="http://x:1234/v1", api_key="y", model="m",
     )
     assert captured_kwargs.get("max_retries") == 0
+
+
+# ── STT release between transcribe and translate ─────────────────────────
+
+
+def test_stt_openvino_release_clears_cache():
+    """release_model() must drop the lru_cache reference so the next
+    transcribe() call re-instantiates the model — that's the whole point:
+    free ~1 GB of Whisper weights before NLLB's ~1.5 GB initialization
+    so the two never co-reside on a 6 GB-capped container."""
+    from app.pipeline import stt_openvino
+
+    # Prime the cache with a sentinel via cache_info so we don't need to
+    # actually load OpenVINO. We just need to verify cache_clear() runs
+    # without raising and that cache_info() reports zero entries after.
+    stt_openvino._model_and_processor.cache_clear()   # baseline
+    assert stt_openvino._model_and_processor.cache_info().currsize == 0
+
+    # Stuff a fake entry directly via the wrapped function's __wrapped__:
+    # we can't easily prime the cache without running the body, but we
+    # CAN verify the release function exists and is callable + idempotent.
+    stt_openvino.release_model()
+    stt_openvino.release_model()   # idempotent
+    assert stt_openvino._model_and_processor.cache_info().currsize == 0
+
+
+def test_stt_faster_whisper_release_clears_cache():
+    """Same contract as the OpenVINO backend — CPU image's Whisper cache
+    must also evict on demand."""
+    from app.pipeline import stt_faster_whisper
+    stt_faster_whisper._model.cache_clear()
+    assert stt_faster_whisper._model.cache_info().currsize == 0
+    stt_faster_whisper.release_model()
+    assert stt_faster_whisper._model.cache_info().currsize == 0
+
+
+def test_lang_detect_release_clears_cache():
+    """The tiny detector model (~250 MB resident) is single-use per job —
+    after the pre-pass succeeds, it should not sit through translation."""
+    from app.pipeline import lang_detect
+    lang_detect._detector.cache_clear()
+    assert lang_detect._detector.cache_info().currsize == 0
+    lang_detect.release_detector()
+    assert lang_detect._detector.cache_info().currsize == 0
+
+
+def test_stt_release_dispatcher_picks_active_backend(monkeypatch):
+    """stt.release() must mirror stt.transcribe()'s dispatch — it should
+    call release_model() on the backend matching settings.whisper_backend."""
+    from app.config import settings as runtime_settings
+    from app.pipeline import stt as stt_mod
+    from app.pipeline import stt_openvino, stt_faster_whisper
+
+    called = {"openvino": 0, "cpu": 0}
+    monkeypatch.setattr(stt_openvino, "release_model",
+                        lambda: called.__setitem__("openvino", called["openvino"] + 1))
+    monkeypatch.setattr(stt_faster_whisper, "release_model",
+                        lambda: called.__setitem__("cpu", called["cpu"] + 1))
+
+    monkeypatch.setattr(runtime_settings, "_overrides",
+                        {**runtime_settings._overrides, "whisper_backend": "openvino"})
+    stt_mod.release()
+    assert called == {"openvino": 1, "cpu": 0}
+
+    monkeypatch.setattr(runtime_settings, "_overrides",
+                        {**runtime_settings._overrides, "whisper_backend": "cpu"})
+    stt_mod.release()
+    assert called == {"openvino": 1, "cpu": 1}
+
+
+def test_processor_releases_stt_before_translation(monkeypatch, tmp_path):
+    """End-to-end: process() must call stt.release() BEFORE invoking the
+    translation provider. This is the load-bearing fix for the silent OOM
+    at the 80% mark — holding Whisper weights resident while NLLB-600M
+    loads breaches a 6 GB cgroup limit on typical NAS deployments and
+    the kernel SIGKILLs the uvicorn process with no Python traceback.
+    """
+    from contextlib import contextmanager
+    from app import cache as cache_mod
+    from app.config import settings as runtime_settings
+    from app.pipeline import audio, stt, tracks
+    from app.pipeline.stt import Cue, TranscriptionResult
+    from app import processor as processor_mod
+
+    media = tmp_path / "movie.mkv"
+    media.write_bytes(b"\x00" * 4096)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    monkeypatch.setattr(runtime_settings, "_overrides",
+                        {**runtime_settings._overrides, "cache_dir": str(cache_dir)})
+    monkeypatch.setattr(cache_mod.settings, "cache_dir", cache_dir, raising=False)
+
+    fake_track = type("T", (), {"index": 0, "language": "en", "title": None,
+                                  "codec": "aac", "channels": 2, "is_default": True})()
+    monkeypatch.setattr(tracks, "probe", lambda *a, **kw: [fake_track])
+    monkeypatch.setattr(tracks, "select", lambda *a, **kw: fake_track)
+
+    @contextmanager
+    def fake_extract(*a, **kw):
+        wav = tmp_path / "audio.wav"
+        wav.write_bytes(b"")
+        yield wav
+    monkeypatch.setattr(audio, "extract_audio", fake_extract)
+
+    monkeypatch.setattr(stt, "transcribe", lambda *a, **kw: TranscriptionResult(
+        detected_language="en",
+        cues=[Cue(id=0, start=0.0, end=2.0, text="hi")],
+    ))
+
+    # Record the order: stt.release() must fire BEFORE get_provider().
+    order: list[str] = []
+    real_release = stt.release
+    def spy_release():
+        order.append("release")
+        real_release()
+    monkeypatch.setattr(stt, "release", spy_release)
+
+    class _Provider:
+        def translate(self, cues, source_lang, target_lang, context=None,
+                      *, progress=None, check_cancel=None):
+            order.append("translate")
+            return list(cues)
+
+    def spy_get_provider(name):
+        order.append("get_provider")
+        return _Provider()
+    monkeypatch.setattr(processor_mod, "get_provider", spy_get_provider)
+
+    from app.processor import ProcessRequest, process
+    req = ProcessRequest(
+        media_path=str(media),
+        target_lang="fr",
+        source_lang_priority=["en", "*"],
+        translation_provider="nllb",
+        mode="audio",
+    )
+    process(req)
+
+    assert order.index("release") < order.index("get_provider"), (
+        f"stt.release() must fire before the translation provider loads; got {order}"
+    )

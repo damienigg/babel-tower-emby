@@ -107,6 +107,26 @@ def _model_and_processor(model_name: str, device: str, cache_root: str):
     return model, processor
 
 
+def release_model() -> None:
+    """Evict the cached OpenVINO Whisper model from RAM.
+
+    Called by processor.py between the STT and translation phases. The
+    intent: keeping Whisper-small (~1 GB) resident while NLLB-600M
+    (~1.5 GB) loads pushes a 6 GB-capped container past its cgroup limit
+    and triggers a silent kernel OOM-kill at exactly the 80% mark of the
+    pipeline. With this release, the next job pays a ~10-30s reload cost
+    when transcribe() is called again — dwarfed by the actual decode work,
+    and obviously much better than crashing.
+
+    The cache_clear() drops the lru_cache's reference to (model, processor);
+    gc.collect() walks any remaining cycles so the underlying OpenVINO
+    CompiledModel destructor runs and releases the iGPU-reserved RAM.
+    """
+    import gc
+    _model_and_processor.cache_clear()
+    gc.collect()
+
+
 # Whisper auto-emits language tokens like <|en|>, <|fr|>, <|ja|> at the start
 # of the decoded output when no language is forced. This set lets us pick the
 # real language token out without false-positive matching on control tokens

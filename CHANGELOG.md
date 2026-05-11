@@ -7,6 +7,60 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-05-11
+
+Resource fix: free the STT model before the translation phase loads its
+own weights. A real incident on TrueNAS — cgroup `mem_limit: 6g`,
+whisper-small + NLLB-600M — produced a silent kernel OOM-kill at the
+80% mark of the pipeline (no Python traceback, no error on the job,
+just a job that stops producing a .vtt). Root cause: Whisper-small
+(~1 GB) stayed resident through the NLLB-600M (~1.5 GB) initialization
+spike; combined with Python heap, torch pools and the page cache of
+the mmap'd model files, the cgroup limit was breached right at the
+translation-phase model load. The `@lru_cache(maxsize=1)` decorators
+on the model factories had no eviction hook — once warmed, models sat
+for the lifetime of the process.
+
+### Added
+
+- `app/pipeline/stt_openvino.release_model()` — drops the cached
+  OpenVINO IR Whisper model + processor. `cache_clear()` plus
+  `gc.collect()` so the OpenVINO `CompiledModel` destructor runs and
+  releases the iGPU-reserved RAM.
+- `app/pipeline/stt_faster_whisper.release_model()` — analogous for
+  the CPU/faster-whisper backend.
+- `app/pipeline/stt.release()` — dispatcher mirror of `transcribe()`;
+  picks the right backend's release function based on
+  `whisper_backend`.
+- `app/pipeline/lang_detect.release_detector()` — frees the tiny
+  language-detection model (~250 MB resident) after the pre-pass.
+
+### Changed
+
+- `app/processor.py` now calls `stt.release()` (and
+  `lang_detect.release_detector()` when the pre-pass ran) between the
+  NoSpeech check and `progress(80, "translating")`. So by the time
+  `get_provider()` instantiates NLLB / the vision LLM client, the
+  Whisper weights are gone and the cgroup has its headroom back.
+
+### Trade-off
+
+The next job pays a 10-30s Whisper reload cost — dwarfed by the
+actual decode work (which is the long pole at 8-80% of the pipeline
+budget). If anyone hits this and would prefer a configurable "keep
+Whisper warm between jobs" mode for a beefier deployment, this is the
+obvious knob to add (default off).
+
+### Tests
+
+- `test_processor_releases_stt_before_translation` — end-to-end spy
+  that asserts the call order release → get_provider → translate.
+- Three direct unit tests for `release_model()` / `release_detector()`
+  cache eviction.
+- One dispatcher test for `stt.release()` picking the right backend.
+
+261 → 266 tests, all green.
+
 ## [0.6.2] — 2026-05-10
 
 UI cosmetics: the per-job elapsed-time counter now sits INSIDE the

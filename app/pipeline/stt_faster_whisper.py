@@ -17,6 +17,15 @@ def _model(name: str, device: str, compute_type: str) -> WhisperModel:
     return WhisperModel(name, device=device, compute_type=compute_type)
 
 
+def release_model() -> None:
+    """Evict the cached CPU Whisper model. Mirror of stt_openvino.release_model
+    — called between transcribe and translate so the local NLLB / vision-LLM
+    state can load without piling on top of an idle Whisper still resident."""
+    import gc
+    _model.cache_clear()
+    gc.collect()
+
+
 def _noop_progress(frac: float) -> None: ...
 def _noop_cancel() -> None: ...
 

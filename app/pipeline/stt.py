@@ -46,3 +46,27 @@ def transcribe(
             f"Unknown BABEL_WHISPER_BACKEND={settings.whisper_backend!r} (expected 'cpu' or 'openvino')"
         )
     return run(audio_path, language_hint=language_hint, progress=progress, check_cancel=check_cancel)
+
+
+def release() -> None:
+    """Evict the active backend's cached Whisper model. Dispatcher mirror of
+    transcribe().
+
+    Called by processor.py between the STT and translation phases so the
+    ~1-1.5 GB Whisper weights don't sit resident while NLLB / vision-LLM
+    state loads — the two together exceed the default 6 GB cgroup limit on
+    typical NAS deployments and trigger a silent kernel OOM-kill at the
+    80% mark of the pipeline. Reloading on the next job costs ~10-30s,
+    which is dwarfed by the transcription cost itself.
+
+    Safe to call when no model is cached — cache_clear() is a no-op then.
+    """
+    from app.config import settings
+    backend = settings.whisper_backend.lower()
+    if backend == "openvino":
+        from app.pipeline.stt_openvino import release_model
+    elif backend == "cpu":
+        from app.pipeline.stt_faster_whisper import release_model
+    else:
+        return
+    release_model()

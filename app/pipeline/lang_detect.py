@@ -27,6 +27,16 @@ def _detector():
     return WhisperModel(_DETECTOR_MODEL, device="cpu", compute_type="int8")
 
 
+def release_detector() -> None:
+    """Drop the cached tiny Whisper detector (~75 MB on disk, ~250 MB
+    resident). Called by processor.py after the pre-pass succeeds — we
+    don't need it again in this job, and the freed RAM is helpful on
+    capped containers where every 100 MB counts at the translation peak."""
+    import gc
+    _detector.cache_clear()
+    gc.collect()
+
+
 def detect(wav_path: Path) -> str | None:
     """Run Whisper's language detection on the first ~30s of audio. Returns
     the ISO 639-1 code (e.g. 'fr', 'ja') or None if detection failed.

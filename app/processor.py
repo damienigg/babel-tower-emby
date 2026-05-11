@@ -280,6 +280,27 @@ def process(
 
     if not transcription.cues:
         raise NoSpeech(f"no speech detected in track {track.index}")
+
+    # Release the STT model BEFORE the translation phase loads its own
+    # weights. With whisper-small (~1 GB) + NLLB-600M (~1.5 GB) + Python
+    # overhead + torch pools + page cache of the mmap'd model files,
+    # holding both resident simultaneously pushes a 6 GB-capped container
+    # past the cgroup limit and the kernel SIGKILLs the process at the
+    # 80% mark — no Python traceback, no error on the job, just a job
+    # that silently stops producing a .vtt. (Real incident: 2026-05 OOM
+    # on TrueNAS with cgroup mem_limit=6g, anon-rss=3.77 GB + mmap'd
+    # weights = past the cap right when NLLB initialized.)
+    #
+    # The next job pays a ~10-30s Whisper reload, which is dwarfed by
+    # the actual decode cost. Worth it. release() is also safe on the
+    # multimodal-mode path: scene/cinematic do not re-call Whisper after
+    # this point, they only call the vision LLM API and the translation
+    # provider.
+    if needs_detection_pre_pass:
+        from app.pipeline import lang_detect
+        lang_detect.release_detector()
+    stt.release()
+
     progress(80, "translating")
     check_cancel()
 
