@@ -7,6 +7,24 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-05-11
+
+Dashboard card cleanup — strip redundant chrome.
+
+### Changed
+
+- **STT card**: the static "OpenVINO IR" bottom line is gone when
+  `whisper_backend = openvino`. It restated the already-visible
+  backend pill and added no information the dynamic
+  `AUTO → GPU / AUTO → CPU` device pill doesn't surface. The CPU
+  backend still shows `int8 · cpu` (the compute-type + device combo
+  there genuinely affects throughput and quality).
+- **Translation card (NLLB branch)**: the "free · local" muted pill
+  is gone. Picking NLLB is the choice; saying "free · local" right
+  after just restates the implication. DeepL's "cloud · 500k/mo free"
+  and the LLM branch's "cloud or local" pills are kept since they
+  carry quota / network-mode info the user actually wants visible.
+
 ## [0.6.5] — 2026-05-11
 
 Settings page reorganized so each section now contains the knobs it

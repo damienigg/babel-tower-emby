@@ -41,13 +41,13 @@
           <span class="status-pill muted" id="openvino-device-pill" hidden></span>
         {% endif %}
       </div>
-      <p>
-        {% if settings.whisper_backend == 'cpu' %}
-          {{ settings.whisper_compute_type }} · {{ settings.whisper_device }}
-        {% else %}
-          OpenVINO IR
-        {% endif %}
-      </p>
+      {# For the CPU backend we expose compute_type + device (e.g. int8 · cpu)
+         since those affect speed and quality. For OpenVINO that info is
+         implicit (IR + iGPU vs. fallback) and the dynamic device pill above
+         already surfaces it — nothing to add here. #}
+      {% if settings.whisper_backend == 'cpu' %}
+        <p>{{ settings.whisper_compute_type }} · {{ settings.whisper_device }}</p>
+      {% endif %}
     </article>
 
     <article class="stat-card">
@@ -55,7 +55,6 @@
       {% if provider == 'nllb' %}
         <div class="pill-row">
           <span class="status-pill ok">NLLB-200</span>
-          <span class="status-pill muted">free · local</span>
         </div>
         <p>
           {# Strip the facebook/ prefix and the nllb-200- noise so the
