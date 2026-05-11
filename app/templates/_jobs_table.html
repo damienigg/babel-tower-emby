@@ -1,10 +1,10 @@
-{# Renders the Recent jobs section. Loaded as a partial via HTMX every 3s, also #}
+{# Renders the Jobs section. Loaded as a partial via HTMX every 3s, also #}
 {# rendered inline on the dashboard's first paint so there's no flash of empty. #}
 <section id="jobs-section"
          hx-get="/partials/jobs"
          hx-trigger="every 3s"
          hx-swap="outerHTML">
-  <h2>Recent jobs</h2>
+  <h2>Jobs</h2>
   {% if not jobs %}
     <p><em>No jobs yet. Open the <a href="/library">Library</a> and click <strong>▶ Subtitle now</strong> on a row, or stage a batch via <strong>+ Batch</strong>.</em></p>
   {% else %}

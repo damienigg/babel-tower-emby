@@ -14,6 +14,10 @@
   <h2>Status</h2>
   <div class="grid">
 
+    {# Each card is a single horizontal row of pills (the .pill-row flex
+       wraps if pills don't fit, so card width is the only floor on
+       single-line rendering). Trailing <p> lines that used to show URLs
+       or model names are folded into the row as muted pills. #}
     <article class="stat-card">
       <header>Media server</header>
       {% if server_configured %}
@@ -21,9 +25,13 @@
           <span class="status-pill ok">{{ settings.media_server_type }}</span>
           <span class="status-pill ok">connected</span>
         </div>
-        <p><code class="path">{{ settings.media_server_url }}</code></p>
       {% else %}
-        <div class="pill-row"><span class="status-pill warn">not configured</span></div>
+        <div class="pill-row">
+          <span class="status-pill warn">not configured</span>
+        </div>
+        {# Unconfigured state is an onboarding edge case — keep the call-
+           to-action link below the pill row so a fresh user knows where
+           to go. Once configured, this branch never renders. #}
         <p><a href="/settings">Set the media server URL + API key →</a></p>
       {% endif %}
     </article>
@@ -39,15 +47,12 @@
              "AUTO → CPU (fallback)" so the user can see at a glance whether
              their iGPU is doing the work. #}
           <span class="status-pill muted" id="openvino-device-pill" hidden></span>
+        {% else %}
+          {# CPU backend: compute_type + device as a single muted pill in
+             the row instead of a trailing <p>. Keeps the card to one line. #}
+          <span class="status-pill muted">{{ settings.whisper_compute_type }} · {{ settings.whisper_device }}</span>
         {% endif %}
       </div>
-      {# For the CPU backend we expose compute_type + device (e.g. int8 · cpu)
-         since those affect speed and quality. For OpenVINO that info is
-         implicit (IR + iGPU vs. fallback) and the dynamic device pill above
-         already surfaces it — nothing to add here. #}
-      {% if settings.whisper_backend == 'cpu' %}
-        <p>{{ settings.whisper_compute_type }} · {{ settings.whisper_device }}</p>
-      {% endif %}
     </article>
 
     <article class="stat-card">
@@ -90,8 +95,8 @@
       <header>Vision (mode: {{ mode }})</header>
       <div class="pill-row">
         <span class="status-pill ok">{{ settings.vision_llm_type }}</span>
+        <span class="status-pill muted">{{ settings.vision_llm_model }}</span>
       </div>
-      <p><code>{{ settings.vision_llm_model }}</code></p>
     </article>
     {% endif %}
 
@@ -104,6 +109,15 @@
     </article>
 
   </div>
+</section>
+
+<section>
+  <h2>How to subtitle</h2>
+  <p>
+    Open the <a href="/library">Library</a> — click <strong>Subtitle this</strong>
+    on a row, or tick multiple rows and click <strong>Subtitle selected</strong>.
+    Every job is a manual action; there is no auto-subtitle on import.
+  </p>
 </section>
 
 {% include "_jobs_table.html" %}
@@ -146,16 +160,4 @@
     setInterval(refresh, 10000);
   })();
 </script>
-
-<section>
-  <h2>How to subtitle a film</h2>
-  <p>Two manual flows on the <a href="/library">Library</a> page — Subtitle This never auto-translates anything on its own, and there is no whole-library "subtitle everything" button on purpose:</p>
-  <ol>
-    <li><strong>One item</strong>: find the row you want, click <strong>Subtitle this</strong>.
-      The job appears below in the jobs list.</li>
-    <li><strong>A custom batch</strong>: tick checkboxes on the rows you want (works across pages —
-      the selection is remembered), then click <strong>Subtitle selected</strong> in the
-      sticky toolbar above the table. One job is queued per ticked item.</li>
-  </ol>
-</section>
 {% endblock %}

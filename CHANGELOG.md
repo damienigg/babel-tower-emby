@@ -7,6 +7,29 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.9] — 2026-05-11
+
+Dashboard layout: every status card is now a single horizontal row of
+pills, the jobs table moves below the how-to copy, and the explanatory
+text is tightened.
+
+### Changed
+
+- **Media server card** — trailing `<p><code>{{ url }}</code></p>` is
+  gone. The type + connected pills are enough; the URL is configuration
+  detail that lives in Settings.
+- **STT card** — for the CPU backend, `compute_type · device` is now
+  a muted pill inside the row instead of a trailing `<p>`. The
+  OpenVINO dynamic `AUTO → GPU` pill was already in the row; it'll
+  visually sit on the same line as long as the card width permits
+  (the `.pill-row` flex wraps only when pills overflow).
+- **Vision card** — `vision_llm_model` moves into the pill row as a
+  muted pill, matching how the Translation card now renders its model.
+- **"How to subtitle a film"** rewritten as one short sentence and
+  moved above the jobs table, so the dashboard reads top-to-bottom:
+  status → how-to → jobs activity.
+- **Jobs section header** renamed *Recent jobs* → *Jobs*.
+
 ## [0.6.8] — 2026-05-11
 
 NLLB-1.3B memory peak slashed so it fits comfortably under a 12 GB
