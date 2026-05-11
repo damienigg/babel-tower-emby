@@ -260,22 +260,58 @@ def process(
         and settings.whisper_backend.lower() == "openvino"
     )
 
-    with audio.extract_audio(req.media_path, track.index) as wav_path:
-        progress(3, "detecting language" if needs_detection_pre_pass else "transcribing")
+    # Intermediate transcript cache: the long pole of the pipeline is
+    # Whisper (8-80% of the budget). If a previous run made it past
+    # transcription but crashed during translation (OOM, transient
+    # provider error, container restart), we have the cues on disk and
+    # can skip Whisper entirely on retry — jumping straight to the
+    # translation phase. Keyed only on STT-relevant inputs, so changing
+    # target_lang / provider / mode also hits the cached transcript.
+    from app import transcript_cache
+    transcript_content_fp = cache_mod.content_fingerprint(media)
+    transcription = transcript_cache.lookup(
+        transcript_content_fp,
+        settings.whisper_model,
+        settings.whisper_backend,
+        settings.vad_enabled,
+        track.index,
+    )
+    transcript_from_cache = transcription is not None
+    if transcript_from_cache:
+        # Hit: skip audio extraction + Whisper. Jump the progress bar
+        # straight to the start of translation so the user sees the
+        # phase change immediately.
+        progress(80, "translating (transcript cache hit)")
         check_cancel()
-        language_hint = track.language
-        if needs_detection_pre_pass:
-            from app.pipeline import lang_detect
-            detected = lang_detect.detect(wav_path)
-            if detected:
-                language_hint = detected
-            progress(8, "transcribing")
+    else:
+        with audio.extract_audio(req.media_path, track.index) as wav_path:
+            progress(3, "detecting language" if needs_detection_pre_pass else "transcribing")
             check_cancel()
-        transcription = stt.transcribe(
-            wav_path,
-            language_hint=language_hint,
-            progress=_scaled(progress, base=8, span=72, stage="transcribing"),
-            check_cancel=check_cancel,
+            language_hint = track.language
+            if needs_detection_pre_pass:
+                from app.pipeline import lang_detect
+                detected = lang_detect.detect(wav_path)
+                if detected:
+                    language_hint = detected
+                progress(8, "transcribing")
+                check_cancel()
+            transcription = stt.transcribe(
+                wav_path,
+                language_hint=language_hint,
+                progress=_scaled(progress, base=8, span=72, stage="transcribing"),
+                check_cancel=check_cancel,
+            )
+        # Store BEFORE the translation phase begins. If translation crashes
+        # mid-flight, the next retry hits this entry and skips the 30+ min
+        # of Whisper. Empty-cue transcriptions are not stored (transcript_cache
+        # handles that internally).
+        transcript_cache.store(
+            transcript_content_fp,
+            settings.whisper_model,
+            settings.whisper_backend,
+            settings.vad_enabled,
+            track.index,
+            transcription,
         )
 
     if not transcription.cues:
@@ -291,17 +327,14 @@ def process(
     # on TrueNAS with cgroup mem_limit=6g, anon-rss=3.77 GB + mmap'd
     # weights = past the cap right when NLLB initialized.)
     #
-    # The next job pays a ~10-30s Whisper reload, which is dwarfed by
-    # the actual decode cost. Worth it. release() is also safe on the
-    # multimodal-mode path: scene/cinematic do not re-call Whisper after
-    # this point, they only call the vision LLM API and the translation
-    # provider.
-    if needs_detection_pre_pass:
-        from app.pipeline import lang_detect
-        lang_detect.release_detector()
-    stt.release()
-
-    progress(80, "translating")
+    # Skip the release dance entirely on a transcript-cache hit — we
+    # never loaded Whisper this run, so there's nothing to free.
+    if not transcript_from_cache:
+        if needs_detection_pre_pass:
+            from app.pipeline import lang_detect
+            lang_detect.release_detector()
+        stt.release()
+        progress(80, "translating")
     check_cancel()
 
     # For scene/cinematic, use the CONTENT fingerprint (not the quick one)

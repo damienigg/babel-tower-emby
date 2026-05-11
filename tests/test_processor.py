@@ -169,3 +169,146 @@ def test_cancel_during_transcribe_does_not_leave_cache_entry(monkeypatch, tmp_pa
     with pytest.raises(JobCanceled):
         process(req)
     assert list(cache_dir.glob("*.json")) == []
+
+
+def test_transcript_cache_hit_skips_audio_extract_and_whisper(monkeypatch, tmp_path):
+    """End-to-end check on the resume-from-80% optimization: when the
+    transcript cache has the cues, process() must NOT call audio.extract_audio
+    or stt.transcribe — both are the long-pole work we're trying to skip.
+
+    Scenario: a previous job transcribed successfully but crashed during
+    translation. Now the user retries. The cached transcription is hit
+    and translation runs against those cues without touching Whisper.
+    """
+    from app import cache as cache_mod
+    from app import processor as processor_mod
+    from app import transcript_cache
+    from app.config import settings as runtime_settings
+    from app.pipeline import audio, stt, tracks
+    from app.pipeline.stt import Cue, TranscriptionResult
+
+    media = tmp_path / "movie.mkv"
+    media.write_bytes(b"\x00" * 4096)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    monkeypatch.setattr(runtime_settings, "_overrides",
+                        {**runtime_settings._overrides, "cache_dir": str(cache_dir)})
+    monkeypatch.setattr(cache_mod.settings, "cache_dir", cache_dir, raising=False)
+
+    fake_track = type("T", (), {"index": 0, "language": "en", "title": None,
+                                  "codec": "aac", "channels": 2, "is_default": True})()
+    monkeypatch.setattr(tracks, "probe", lambda *a, **kw: [fake_track])
+    monkeypatch.setattr(tracks, "select", lambda *a, **kw: fake_track)
+
+    # Seed the transcript cache with a result that would normally come
+    # from a previous run's Whisper pass.
+    seeded = TranscriptionResult(
+        detected_language="en",
+        cues=[
+            Cue(id=0, start=0.0, end=2.0, text="hello"),
+            Cue(id=1, start=2.0, end=4.0, text="world"),
+        ],
+    )
+    content_fp = cache_mod.content_fingerprint(media)
+    transcript_cache.store(
+        content_fp,
+        runtime_settings.whisper_model,
+        runtime_settings.whisper_backend,
+        runtime_settings.vad_enabled,
+        fake_track.index,
+        seeded,
+    )
+
+    # The load-bearing assertions: audio.extract_audio and stt.transcribe
+    # must NEVER be called on a cache hit.
+    calls = {"extract": 0, "transcribe": 0}
+    from contextlib import contextmanager
+    @contextmanager
+    def trap_extract(*a, **kw):
+        calls["extract"] += 1
+        yield tmp_path / "ignored.wav"
+    def trap_transcribe(*a, **kw):
+        calls["transcribe"] += 1
+        return seeded   # if this fires we've broken the optimization
+    monkeypatch.setattr(audio, "extract_audio", trap_extract)
+    monkeypatch.setattr(stt, "transcribe", trap_transcribe)
+
+    # Trivial provider just to let process() complete.
+    class PassThroughProvider:
+        def translate(self, cues, source_lang, target_lang, context=None,
+                      *, progress=None, check_cancel=None):
+            return list(cues)
+    monkeypatch.setattr(processor_mod, "get_provider", lambda name: PassThroughProvider())
+
+    req = _req(mode="audio", media_path=str(media), translation_provider="nllb")
+    result = processor_mod.process(req)
+
+    assert calls["extract"] == 0, "transcript cache hit must skip audio extraction"
+    assert calls["transcribe"] == 0, "transcript cache hit must skip Whisper"
+    assert result.cue_count == 2
+    assert result.detected_source_language == "en"
+
+
+def test_transcript_cache_stored_after_successful_transcribe(monkeypatch, tmp_path):
+    """Cache must be populated as soon as Whisper finishes, BEFORE
+    translation begins — that's what makes resume-from-80% work after
+    a translation-phase crash."""
+    from app import cache as cache_mod
+    from app import processor as processor_mod
+    from app import transcript_cache
+    from app.config import settings as runtime_settings
+    from app.pipeline import audio, stt, tracks
+    from app.pipeline.stt import Cue, TranscriptionResult
+
+    media = tmp_path / "movie.mkv"
+    media.write_bytes(b"\x00" * 4096)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    monkeypatch.setattr(runtime_settings, "_overrides",
+                        {**runtime_settings._overrides, "cache_dir": str(cache_dir)})
+    monkeypatch.setattr(cache_mod.settings, "cache_dir", cache_dir, raising=False)
+
+    fake_track = type("T", (), {"index": 0, "language": "en", "title": None,
+                                  "codec": "aac", "channels": 2, "is_default": True})()
+    monkeypatch.setattr(tracks, "probe", lambda *a, **kw: [fake_track])
+    monkeypatch.setattr(tracks, "select", lambda *a, **kw: fake_track)
+
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_extract(*a, **kw):
+        wav = tmp_path / "audio.wav"
+        wav.write_bytes(b"")
+        yield wav
+    monkeypatch.setattr(audio, "extract_audio", fake_extract)
+
+    fake_transcription = TranscriptionResult(
+        detected_language="en",
+        cues=[Cue(id=0, start=0.0, end=2.0, text="hello")],
+    )
+    monkeypatch.setattr(stt, "transcribe", lambda *a, **kw: fake_transcription)
+
+    # Snapshot whether translate sees a stored transcript on disk by
+    # the time it runs.
+    seen_at_translate_time = {}
+    class CheckingProvider:
+        def translate(self, cues, source_lang, target_lang, context=None,
+                      *, progress=None, check_cancel=None):
+            content_fp = cache_mod.content_fingerprint(media)
+            hit = transcript_cache.lookup(
+                content_fp,
+                runtime_settings.whisper_model,
+                runtime_settings.whisper_backend,
+                runtime_settings.vad_enabled,
+                fake_track.index,
+            )
+            seen_at_translate_time["hit"] = hit is not None
+            return list(cues)
+    monkeypatch.setattr(processor_mod, "get_provider", lambda name: CheckingProvider())
+
+    req = _req(mode="audio", media_path=str(media), translation_provider="nllb")
+    processor_mod.process(req)
+
+    assert seen_at_translate_time["hit"], (
+        "transcript_cache.store() must be called BEFORE the provider runs, "
+        "so a translation-phase crash leaves the transcript recoverable"
+    )

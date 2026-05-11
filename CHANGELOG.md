@@ -7,6 +7,75 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-11
+
+**Resume from 80%.** When translation crashes (OOM, transient
+provider error, container restart), the next retry no longer
+re-runs Whisper — it resumes directly at the translation phase
+against the already-computed cue list. For a 2 h film at
+large-v3-turbo that's ~30 minutes saved per retry.
+
+### Added
+
+- `app/transcript_cache.py` — on-disk JSON cache of
+  `TranscriptionResult`, keyed only on STT-relevant inputs:
+  `(content_fingerprint, whisper_model, whisper_backend,
+  vad_enabled, track_index)`. Stored under
+  `cache_dir/transcripts/{key}.json` with atomic `os.replace`
+  writes and corrupted-file quarantine on read.
+
+  The cache key deliberately does NOT include `target_lang`,
+  `provider`, `mode`, or any LLM/vision setting — those don't
+  affect the transcript. So changing the translation provider
+  between runs ALSO hits the cached transcript.
+
+- `app/processor.py` — checks `transcript_cache.lookup` before
+  the audio-extraction block. On a hit, skips both ffmpeg audio
+  extraction AND the Whisper pass entirely, jumping the progress
+  bar straight to "translating (transcript cache hit)". On a
+  miss, transcribes as normal and stores the result IMMEDIATELY
+  after `stt.transcribe()` returns — before the translation phase
+  begins, so a crash there is recoverable.
+
+  The `stt.release()` + `lang_detect.release_detector()` calls
+  are also skipped on a cache hit — nothing was loaded this run,
+  so there's nothing to free.
+
+### Behavioral effect
+
+For a typical 2 h film at large-v3-turbo + NLLB-1.3B:
+
+- First run: same total time as before. After Whisper succeeds
+  the transcript is written to disk; total time unchanged.
+- Translation crashes mid-flight: dashboard now shows a `failed`
+  row with the last persisted progress (added in 0.6.4).
+- User retries: progress jumps to 80% immediately, only the
+  translation phase runs. ~30 min → ~5 min on the retry.
+
+### Tests
+
+- 14 new unit tests in `test_transcript_cache.py` covering
+  round-trip, key invalidation per STT axis, empty-cue suppression,
+  corrupted-file quarantine, atomic writes, key composition.
+- 2 new integration tests in `test_processor.py`:
+  `test_transcript_cache_hit_skips_audio_extract_and_whisper`
+  (the load-bearing one — on a hit, neither audio.extract_audio
+  nor stt.transcribe must be called) and
+  `test_transcript_cache_stored_after_successful_transcribe`
+  (proves the file is on disk BEFORE the provider runs, so a
+  translation-phase crash leaves it recoverable).
+
+291 tests, all green (was 275).
+
+### Operational notes
+
+- Cleanup policy: none for now. Each transcript serializes to
+  ~200 KB. Disk pressure? `rm -rf cache_dir/transcripts/` is
+  safe — next run just re-transcribes.
+- Want to force re-transcription? Either delete the specific
+  file, or change `whisper_model` / `vad_enabled` (cache key
+  includes them, so toggling invalidates).
+
 ## [0.6.9] — 2026-05-11
 
 Dashboard layout: every status card is now a single horizontal row of
