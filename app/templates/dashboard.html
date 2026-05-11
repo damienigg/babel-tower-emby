@@ -52,28 +52,26 @@
 
     <article class="stat-card">
       <header>Translation</header>
+      {# Model name shown as a muted pill inside the row — same style as
+         the STT card's whisper_model pill. Earlier we rendered the model
+         on a separate <p><code>…</code></p> line, which made it appear
+         in a monospace font that didn't match the rest of the dashboard. #}
       {% if provider == 'nllb' %}
+        {# Strip the facebook/ prefix and the nllb-200- noise so the
+           user just sees the variant size (e.g. "distilled-1.3B"). #}
+        {% set nllb_short = settings.nllb_model | replace('facebook/nllb-200-', '') %}
         <div class="pill-row">
           <span class="status-pill ok">NLLB-200</span>
+          <span class="status-pill muted">{{ nllb_short }}</span>
         </div>
-        <p>
-          {# Strip the facebook/ prefix and the nllb-200- noise so the
-             user just sees the variant size. #}
-          {% set nllb_short = settings.nllb_model | replace('facebook/nllb-200-', '') %}
-          <code>{{ nllb_short }}</code>
-        </p>
       {% elif provider == 'deepl' %}
         <div class="pill-row">
           <span class="status-pill ok">DeepL</span>
           <span class="status-pill muted">cloud · 500k/mo free</span>
-        </div>
-        <p>
-          {% if settings.deepl_api_key and settings.deepl_api_key != '[set]' %}
-            <small>API key: <code>[set]</code></small>
-          {% else %}
-            <small style="color: var(--bt-warn-fg);">⚠ DeepL API key not set</small>
+          {% if not settings.deepl_api_key or settings.deepl_api_key == '' %}
+            <span class="status-pill warn">⚠ API key missing</span>
           {% endif %}
-        </p>
+        </div>
       {% elif provider == 'llm' %}
         <div class="pill-row">
           <span class="status-pill ok">{{ settings.translation_llm_type }}</span>
@@ -82,8 +80,8 @@
           {% else %}
             <span class="status-pill muted">cloud</span>
           {% endif %}
+          <span class="status-pill muted">{{ settings.translation_llm_model }}</span>
         </div>
-        <p><code>{{ settings.translation_llm_model }}</code></p>
       {% endif %}
     </article>
 
@@ -98,15 +96,11 @@
     {% endif %}
 
     <article class="stat-card">
-      <header>Default job</header>
+      <header>Parameters</header>
       <div class="pill-row">
-        <span class="status-pill ok">→ {{ settings.default_target_lang }}</span>
+        <span class="status-pill ok">{{ settings.default_target_lang }}</span>
         <span class="status-pill muted">mode: {{ mode }}</span>
       </div>
-      <p>
-        <small>Click <em>Subtitle this</em> on a row → produces
-        <code>Movie.{{ settings.default_target_lang }}.{{ mode }}.ai.vtt</code></small>
-      </p>
     </article>
 
   </div>

@@ -7,6 +7,29 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-05-11
+
+Dashboard polish — model names rendered consistently, Parameters card
+streamlined.
+
+### Changed
+
+- **Translation card**: model names (NLLB variant, LLM model) now
+  appear as muted pills inside the same row as the provider pill —
+  matching the STT card's `whisper_model` style. Previously they
+  rendered as inline `<code>` in a separate `<p>`, which put them in
+  a monospace font that didn't match the rest of the dashboard. The
+  `<p>` line is gone for all three provider branches.
+- **DeepL branch** of the Translation card: the "API key: [set]" line
+  is removed. Only the missing-key warning is surfaced as an inline
+  warn pill — when the key is set there's nothing useful to display.
+- **Parameters card** (was "Default job"): renamed for clarity (the
+  card is a parameters summary, not a job status). The `→` arrow
+  before the target-language pill is gone — pure decoration — and
+  the trailing "Click *Subtitle this*…" help paragraph is gone since
+  that flow is already explained in the "How to subtitle a film"
+  section at the bottom of the dashboard.
+
 ## [0.6.6] — 2026-05-11
 
 Dashboard card cleanup — strip redundant chrome.
