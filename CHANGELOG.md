@@ -7,6 +7,61 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-05-11
+
+Jobs queue is now persisted to disk. After an OOM-kill or any other
+restart, the dashboard regains every previously-known job — including
+the one that died mid-flight, with its last-known progress baked into
+the error column. Previously the queue lived only in RAM, so a kill
+wiped every trace and the user was left wondering whether the job had
+ever existed.
+
+### Added
+
+- `app/jobs_store.py` — JSON-backed persistence at
+  `cache_dir/jobs.json` with atomic `os.replace` writes (same pattern
+  as the settings store).
+- `app/jobs.py:load_persisted()` — startup hook called from
+  `app/main.py:lifespan`. Reads the file, populates the in-memory dict,
+  and marks orphans (`queued` / `running` / `canceling` from the
+  previous instance) as `failed` with a descriptive error that
+  includes timestamp and last-known progress:
+
+  ```
+  process restarted at 2026-05-11 19:42:13 before job finished
+  (likely OOM-kill or container restart) — last progress: 78% transcribing
+  ```
+
+- `app/jobs.py:_persist()` / `_persist_throttled()` — internal helpers
+  called from every status transition (queued→running, →succeeded,
+  →failed, →canceled) and from `Job.update_progress` (throttled to one
+  write per 3 s per job).
+
+### Changed
+
+- `Job.update_progress` now writes a throttled disk snapshot so a kill
+  mid-transcription preserves "stage=transcribing, pct=78" rather than
+  whatever was last on disk.
+- `_run()` persists immediately at every status transition; the throttle
+  is reserved for the frequent progress updates.
+
+### Trade-offs
+
+- ~1 KB of disk write per status transition + at most one ~1 KB write
+  every 3 s per running job. Negligible on the 500-job cap.
+- Persistence is best-effort: any IO error is logged + swallowed, and
+  the in-memory queue remains the source of truth for the running
+  process. A corrupted on-disk file is renamed to `.corrupt` at
+  startup and the queue starts fresh — uvicorn never crashes over a
+  bad jobs file.
+
+### Tests
+
+- 14 new tests in `test_jobs_persistence.py` covering round-trip,
+  orphan rewrite, atomic write, corrupted-file recovery, throttling.
+
+266 → 275 tests, all green.
+
 ## [0.6.3] — 2026-05-11
 
 Resource fix: free the STT model before the translation phase loads its

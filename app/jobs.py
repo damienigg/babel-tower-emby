@@ -1,8 +1,14 @@
-"""In-memory job tracking with serialized execution.
+"""In-memory job tracking with serialized execution and on-disk persistence.
 
 A single asyncio.Lock serializes the heavy work (Whisper + translation) so
-back-to-back UI clicks don't thrash RAM/iGPU. Jobs are kept in memory; restart
-loses in-flight state. Acceptable for now; swap for sqlite if persistence matters.
+back-to-back UI clicks don't thrash RAM/iGPU. Jobs live in-memory for fast
+reads, with a JSON-backed shadow copy on disk (see app/jobs_store.py) so
+that:
+
+- Completed jobs stay visible in the Recent jobs panel across restarts.
+- A job that was ``running`` when uvicorn died (planned restart OR
+  OOM-kill) is surfaced as ``failed`` at next startup, with its last
+  known progress, instead of vanishing without a trace.
 
 The main event loop is captured at app startup (see app/main.py:lifespan) so
 that sync FastAPI handlers — which run in a threadpool worker without a loop —
@@ -70,6 +76,10 @@ class Job:
         if clamped > self.progress_pct or stage != self.progress_stage:
             self.progress_pct = max(self.progress_pct, clamped)
             self.progress_stage = stage
+            # Throttled disk shadow so a kill-mid-flight leaves a trace of
+            # which percentage / stage we were at. Save sites for status
+            # *transitions* use _persist() directly to bypass the throttle.
+            _persist_throttled(self.id)
 
     def request_cancel(self) -> None:
         self.cancel_requested = True
@@ -116,6 +126,51 @@ def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
     _main_loop = loop
 
 
+def _persist() -> None:
+    """Snapshot _jobs under the lock, then call jobs_store.save_jobs OUTSIDE
+    the lock — disk IO must not block the in-memory queue.
+
+    Called on every status transition. Lazy-import jobs_store so the
+    persistence layer stays optional at import time (and to avoid the
+    obvious cycle since jobs_store deserializes back into Job)."""
+    from app import jobs_store
+    with _jobs_lock:
+        snapshot = list(_jobs.values())
+    jobs_store.save_jobs(snapshot)
+
+
+def _persist_throttled(job_id: str) -> None:
+    """Throttled variant for progress-only updates — at most one write
+    every PROGRESS_SAVE_INTERVAL_S seconds per job. Status transitions
+    must NOT use this (they should reach disk immediately)."""
+    from app import jobs_store
+    with _jobs_lock:
+        snapshot = list(_jobs.values())
+    jobs_store.save_jobs_throttled(snapshot, job_id)
+
+
+def load_persisted() -> None:
+    """Read persisted jobs from disk into the in-memory dict, marking
+    orphans as failed. Called once from app.main:lifespan at startup.
+
+    Idempotent — safe to call again, though there's no production
+    workflow that should need to.
+    """
+    from app import jobs_store
+    loaded = jobs_store.load_jobs()
+    if not loaded:
+        return
+    with _jobs_lock:
+        for job in loaded:
+            _jobs[job.id] = job
+        while len(_jobs) > MAX_JOBS:
+            _jobs.popitem(last=False)
+    # Commit the orphan markers (status='failed' etc.) to disk so next
+    # restart doesn't re-mark them with a fresh "process restarted at..."
+    # timestamp.
+    _persist()
+
+
 def list_jobs(limit: int = 50) -> list[Job]:
     # Snapshot under the lock — sorting/iterating an OrderedDict that's
     # being mutated raises RuntimeError. Job dataclasses themselves can
@@ -156,6 +211,9 @@ def submit(
         _jobs[job.id] = job
         while len(_jobs) > MAX_JOBS:
             _jobs.popitem(last=False)
+    # Persist the new queued row immediately so a crash between submit
+    # and run still leaves a trace of "this job was asked for".
+    _persist()
 
     async def _run():
         async with _lock:
@@ -165,6 +223,7 @@ def submit(
             if job.cancel_requested:
                 job.status = "canceled"
                 job.finished_at = time.time()
+                _persist()
                 return
             job.status = "running"
             job.started_at = time.time()
@@ -176,6 +235,7 @@ def submit(
             timeout = int(getattr(settings, "job_timeout_seconds", 0) or 0)
             job.deadline = job.started_at + timeout if timeout > 0 else None
             job.update_progress(0, "starting")
+            _persist()   # transition queued → running
             try:
                 await runner(job)
                 job.status = "succeeded"
@@ -192,6 +252,7 @@ def submit(
                 job.error = f"{type(e).__name__}: {e}"
             finally:
                 job.finished_at = time.time()
+                _persist()   # commit terminal state to disk
 
     if _main_loop is None:
         raise RuntimeError(

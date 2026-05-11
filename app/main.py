@@ -40,6 +40,13 @@ async def lifespan(app: FastAPI):
     # Capture the main event loop so sync routes can schedule async jobs.
     loop = asyncio.get_running_loop()
     jobs.set_main_loop(loop)
+    # Read the persisted job queue from disk. Any job that was running /
+    # queued / canceling at the moment the previous process died (planned
+    # restart OR OOM-kill) is rewritten to status='failed' with a clear
+    # error message that includes its last known progress — the dashboard
+    # then shows the user exactly what was happening when things went
+    # south, instead of looking like nothing ever ran.
+    jobs.load_persisted()
     # Replace the default ThreadPoolExecutor with a bounded one so
     # asyncio.to_thread + sync route handlers can't oversubscribe the
     # CPU under burst load. The executor is what receives every
