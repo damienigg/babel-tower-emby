@@ -7,6 +7,46 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-05-11
+
+Settings page reorganized so each section now contains the knobs it
+actually owns. Previously the Translation provider chooser lived in
+"Defaults" while the NLLB / DeepL / LLM knobs that depend on it lived
+two sections away — picking DeepL meant scrolling down to find your
+API key in an orphaned single-field "API keys" section.
+
+### Changed
+
+- `default_translation_provider` moves from **Defaults** to the top of
+  **Translation**, where it can sit visually adjacent to the knobs it
+  gates (NLLB model variant, batch sizes, DeepL key).
+- `deepl_api_key` moves from the orphaned **API keys** section into
+  **Translation**, next to `deepl_batch_size`, with field-level
+  `show_if` so it only appears when provider=DeepL.
+- `translation_batch_size` moves from **Translation** to the top of
+  **Translation model** — it's LLM-only and belongs with the rest of
+  the LLM config.
+- The **API keys** section is removed (now empty after the DeepL key
+  migration).
+- Section display order is reflowed by workflow priority: Media server
+  (start here) → Defaults → STT → Translation → Translation model →
+  Vision → Scene & Cinematic → Subtitles → Resource safety → Security.
+  Advanced tuning (Resource safety, Security) sits at the bottom so
+  it doesn't crowd the first thing a fresh user sees.
+
+### Removed
+
+- Section-level `show_if` on **Translation**. The provider chooser
+  now lives inside the section, so hiding the whole section would
+  also hide the only way to change provider. Field-level `show_if` on
+  each NLLB/DeepL/LLM-only field handles the conditional visibility.
+
+### Tests
+
+275 tests, all green (no changes to test code — the reorg is entirely
+within `_FIELD_META` and `_SECTION_META` / `_SECTION_SHOW_IF`, which
+the template renders generically).
+
 ## [0.6.4] — 2026-05-11
 
 Jobs queue is now persisted to disk. After an OOM-kill or any other

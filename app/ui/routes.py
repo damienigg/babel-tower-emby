@@ -84,6 +84,45 @@ templates.env.globals["app_version"] = __version__
 # Whisper choices have NO $ cost — only compute time × disk space.
 
 _SECTION_META: dict[str, str] = {
+    "Media server": (
+        "START HERE — without a working media server connection nothing else "
+        "is reachable. Pick your server type, paste its URL + API key (X-Plex-"
+        "Token for Plex), save. The Library tab lights up once this section "
+        "is configured."
+    ),
+    "Defaults": (
+        "Pre-set choices applied when you click 'Subtitle this' or 'Subtitle "
+        "selected' in the Library without overrides. The cost/complexity "
+        "lever is Mode here — pick the provider in the Translation section "
+        "below."
+    ),
+    "Speech-to-Text": (
+        "Whisper transcribes audio to text. ALWAYS FREE — runs 100% locally, "
+        "model is downloaded once. The trade-off here is compute time × quality "
+        "× disk space, NOT money."
+    ),
+    "Translation": (
+        "Pick the translation provider, then configure its specific knobs. "
+        "Provider is the main cost/quality lever — NLLB is fully free and "
+        "local, DeepL is freemium cloud, LLM uses whatever you wire up in the "
+        "Translation model section below (local Ollama, cloud Claude / GPT, "
+        "anything in between)."
+    ),
+    "Translation model": (
+        "The LLM that translates subtitle cues (only used when provider=llm). "
+        "Configure cloud (Anthropic / OpenAI / OpenRouter / …) or fully local "
+        "(Ollama / LM Studio / LocalAI / vLLM) — Subtitle This doesn't care which."
+    ),
+    "Vision model": (
+        "The LLM that describes keyframes for the scene bible used by scene "
+        "and cinematic modes."
+    ),
+    "Scene & Cinematic": (
+        "Tuning knobs for scene-detection and cinematic-frame extraction."
+    ),
+    "Subtitles": (
+        "WebVTT line-wrap formatting."
+    ),
     "Resource safety": (
         "Caps that keep a single job from consuming the host. The defaults are "
         "sized for a 2 h film on a 6 GB / 4 vCPU container. Combine these with "
@@ -96,44 +135,6 @@ _SECTION_META: dict[str, str] = {
         "where you wouldn't trust every device to start jobs or read your "
         "API keys."
     ),
-    "Media server": (
-        "START HERE — without a working media server connection nothing else "
-        "is reachable. Pick your server type, paste its URL + API key (X-Plex-"
-        "Token for Plex), save. The Library tab lights up once this section "
-        "is configured."
-    ),
-    "Defaults": (
-        "Pre-set choices applied when you click 'Subtitle this' or 'Subtitle "
-        "selected' in the Library without overrides. THIS is where the "
-        "cost/complexity lever lives — Provider × Mode determines whether "
-        "each job is free, cheap, or expensive."
-    ),
-    "Speech-to-Text": (
-        "Whisper transcribes audio to text. ALWAYS FREE — runs 100% locally, "
-        "model is downloaded once. The trade-off here is compute time × quality "
-        "× disk space, NOT money."
-    ),
-    "Translation": (
-        "Provider-specific translation knobs."
-    ),
-    "Translation model": (
-        "The LLM that translates subtitle cues. Configure cloud (Anthropic / "
-        "OpenAI / OpenRouter / …) or fully local (Ollama / LM Studio / LocalAI / "
-        "vLLM) — Subtitle This doesn't care which."
-    ),
-    "Vision model": (
-        "The LLM that describes keyframes for the scene bible used by scene "
-        "and cinematic modes."
-    ),
-    "Scene & Cinematic": (
-        "Tuning knobs for scene-detection and cinematic-frame extraction."
-    ),
-    "Subtitles": (
-        "WebVTT line-wrap formatting."
-    ),
-    "API keys": (
-        "Cloud provider keys."
-    ),
 }
 
 
@@ -142,12 +143,12 @@ _SECTION_META: dict[str, str] = {
 # "current value is in the list"). The general rule: if a whole section's
 # fields aren't going to be used given the current Defaults config, hide
 # the section entirely. Simpler interface, less to read for new users.
+#
+# Note: "Translation" itself is never gated — the provider chooser lives
+# there, so hiding the whole section would also hide the only way to
+# change provider. Field-level show_if inside the section handles the
+# NLLB-only / DeepL-only / LLM-only fields.
 _SECTION_SHOW_IF: dict[str, dict] = {
-    # Translation (NLLB model variant + LLM batch size) is irrelevant when
-    # the user picked DeepL — DeepL has neither a model choice nor a batch
-    # knob exposed to us.
-    "Translation": {"field": "default_translation_provider",
-                    "equals": ["nllb", "llm"]},
     # The Translation model section is the per-cue-translation LLM config.
     # Only meaningful when provider=llm (NLLB and DeepL ignore it entirely).
     "Translation model": {"field": "default_translation_provider",
@@ -159,55 +160,15 @@ _SECTION_SHOW_IF: dict[str, dict] = {
     # Scene-detection tuning knobs do nothing in audio mode.
     "Scene & Cinematic": {"field": "default_mode",
                           "equals": ["scene", "cinematic"]},
-    # API keys section currently only carries the DeepL key; if the user
-    # isn't on DeepL there's nothing to enter here.
-    "API keys": {"field": "default_translation_provider",
-                 "equals": "deepl"},
 }
 
 
 _FIELD_META: list[dict[str, Any]] = [
-    # ── Resource safety ─────────────────────────────────────────────────────
-    # These caps prevent a long film + heavy mode from consuming all host
-    # RAM. They complement the cgroup limits in docker-compose.yml.
-    {"key": "job_timeout_seconds", "section": "Resource safety",
-     "label": "Job wall-clock timeout (seconds)", "type": "number",
-     "help": "Hard cap on a single job's runtime. 5400 = 90 min — generous for "
-             "a 3 h film at whisper-large on int8 CPU. Set to 0 to disable. "
-             "Enforced at every pipeline checkpoint (between audio segments, "
-             "between translation batches, between scene-detect ffmpeg lines) "
-             "so a wedged job can't hold the queue indefinitely."},
-    {"key": "stt_audio_segment_seconds", "section": "Resource safety",
-     "label": "OpenVINO STT audio-segment size (seconds)", "type": "number",
-     "help": "How much audio is loaded into RAM at once for the OpenVINO "
-             "Whisper backend. 600 = 10 min, ~75 MB resident regardless of "
-             "film length. Lower values reduce RAM further; higher values "
-             "have fewer segment-boundary cue splits. Ignored when "
-             "whisper_backend = cpu (faster-whisper streams from disk on its own)."},
-    {"key": "cinematic_max_cues_with_frames", "section": "Resource safety",
-     "label": "Cinematic — max cues that get a frame attached", "type": "number",
-     "help": "Hard cap on per-cue frame extraction in cinematic mode. A 2 h+ "
-             "dialog-heavy film can produce 1500+ cues — pre-extracting one "
-             "JPEG per cue is what caused the original TrueNAS OOM. With this "
-             "cap, only the first N cues ship frames; remaining cues translate "
-             "text-only (still using the scene bible). Set to 0 to disable "
-             "per-cue frames entirely (cinematic ≈ scene mode)."},
-
-    # ── Security ────────────────────────────────────────────────────────────
-    {"key": "auth_credentials", "section": "Security",
-     "label": "HTTP Basic credentials (user:password)", "type": "password",
-     "help": "Leave BLANK for no auth (default — preserves zero-config first "
-             "boot). Set to 'user:password' to require Basic auth on every "
-             "endpoint except /health. Adds a same-origin check on POST/PATCH/"
-             "PUT/DELETE so a malicious LAN page can't ride your saved browser "
-             "credentials to start jobs. Apply this on any network where you "
-             "wouldn't trust every device — the Library page can queue jobs "
-             "that consume your LLM quota."},
-
     # ── Media server (Emby / Jellyfin / Plex) — REQUIRED FIRST ────────────────
     # Nothing in the rest of the app works until this section is filled in
-    # (Library page is empty, "Subtitle this" buttons fail). Put it at the
-    # top of the form so it's the first thing a fresh user sees.
+    # (Library page is empty, "Subtitle this" buttons fail). It is the first
+    # thing a fresh user sees — Resource safety / Security live at the bottom
+    # so they don't crowd the start of the form.
     {"key": "media_server_type", "section": "Media server",
      "label": "Server type", "type": "select",
      "options": [
@@ -249,6 +210,65 @@ _FIELD_META: list[dict[str, Any]] = [
              "server — only do it on a trusted LAN. Advanced alternative: keep this ON "
              "and mount a custom CA bundle into the container, then set "
              "SSL_CERT_FILE=/path/to/ca.crt in the env — httpx picks it up automatically."},
+
+    # ── Defaults — workflow knobs ─────────────────────────────────────────────
+    # Per-job overrides for target language, mode, and skip behavior. The
+    # provider chooser used to live here but moved into the Translation
+    # section below — it belongs with the knobs it gates.
+    {"key": "default_target_lang", "section": "Defaults",
+     "label": "Default target language", "type": "select",
+     "options": _LANGUAGE_DROPDOWN_OPTIONS,
+     "help": "Language you want subtitles in. Used when you don't override per-job. "
+             "Coverage varies by translation provider — NLLB and DeepL support ~30 "
+             "languages well; LLM providers handle whatever the underlying model knows."},
+    # NOTE: default_source_lang_priority is intentionally not exposed.
+    # Hard-coded default ['en', '*'] in _EnvSettings handles 99% of cases.
+    # Power users can override via BABEL_DEFAULT_SOURCE_LANG_PRIORITY.
+    # NOTE: default_translation_provider lives in the Translation section
+    # below — the provider chooser belongs with the knobs it gates.
+    {"key": "default_mode", "section": "Defaults",
+     "label": "Quality tier — pick your call-volume tier", "type": "select",
+     "options": [
+         {"value": "audio",
+          "label": "audio · [+0 LLM calls beyond translation] whisper only · works with any provider · cheapest · default"},
+         {"value": "scene",
+          "label": "scene · [+~20 vision-LLM calls/film] adds scene bible · improves pronouns/gender · needs Vision model + provider=llm"},
+         {"value": "cinematic",
+          "label": "cinematic · [+1 LLM call per cue with image] adds per-cue frame to translation · most expensive · needs vision-capable Translation model"},
+     ],
+     "help": (
+         "Higher tier = more visual context for the translator = better quality on tricky "
+         "scenes, but more LLM calls.\n"
+         "• audio uses Whisper only. No vision. Works with any provider (NLLB/DeepL/LLM).\n"
+         "• scene runs ffmpeg scene-detection, sends one keyframe per shot to the Vision LLM "
+         "for a 1-2 sentence description, then feeds the resulting bible to the translator as "
+         "cached system context. Requires Vision model section configured AND provider=llm.\n"
+         "• cinematic does what scene does AND additionally attaches one keyframe per cue to "
+         "the translation call so the translator literally sees each moment. Requires the "
+         "Translation model to be vision-capable AND provider=llm."
+     )},
+    {"key": "default_skip_if_target_audio_exists", "section": "Defaults",
+     "label": "Skip when target-language audio is already present", "type": "checkbox",
+     "help": "If the file already has audio in the target language, do nothing. Saves "
+             "compute on items where the user can just switch audio track in their player."},
+    {"key": "write_detected_language_to_file", "section": "Defaults",
+     "label": "Tag detected source language back into the source file (MKV only)", "type": "checkbox",
+     "help": "When a film's audio track has no language tag (Emby just shows 'Audio'), "
+             "language detection runs differently per backend: the OpenVINO STT backend "
+             "needs a Whisper-tiny pre-pass on the first 30s of audio (it can't surface "
+             "its own auto-detection through the optimum-intel API), while the CPU/"
+             "faster-whisper backend detects internally during the main transcribe call "
+             "at zero extra cost. Either way the transcription gets the right language. "
+             "With this checkbox ON, we ALSO write the detected language back into the "
+             "file's EBML header via `mkvpropedit` — instant, modifies only metadata, "
+             "NEVER touches the audio/video data sections. Restricted to MKV/MKA/WebM. "
+             "Non-Matroska containers (MP4/MOV/AVI/...) are deliberately left untouched: "
+             "an ffmpeg remux would technically preserve audio byte-for-byte but rewrites "
+             "the whole file with documented edge cases (timestamp re-derivation, lost "
+             "custom metadata) — not worth the risk on a media library. Detection still "
+             "drives transcription correctness regardless of container; only the persist-"
+             "to-Emby step is skipped for non-MKV. Turn off entirely to keep all source "
+             "files completely pristine."},
 
     # ── Speech-to-Text ────────────────────────────────────────────────────────
     {"key": "whisper_backend", "section": "Speech-to-Text",
@@ -317,17 +337,12 @@ _FIELD_META: list[dict[str, Any]] = [
          "'[openvino] whisper:…  selected=GPU' confirms what was actually picked."
      )},
 
-    # ── Defaults — the cost lever ─────────────────────────────────────────────
-    {"key": "default_target_lang", "section": "Defaults",
-     "label": "Default target language", "type": "select",
-     "options": _LANGUAGE_DROPDOWN_OPTIONS,
-     "help": "Language you want subtitles in. Used when you don't override per-job. "
-             "Coverage varies by translation provider — NLLB and DeepL support ~30 "
-             "languages well; LLM providers handle whatever the underlying model knows."},
-    # NOTE: default_source_lang_priority is intentionally not exposed.
-    # Hard-coded default ['en', '*'] in _EnvSettings handles 99% of cases.
-    # Power users can override via BABEL_DEFAULT_SOURCE_LANG_PRIORITY.
-    {"key": "default_translation_provider", "section": "Defaults",
+    # ── Translation (provider chooser + provider-specific params) ─────────────
+    # The provider chooser lives at the top of this section so it gates the
+    # NLLB/DeepL/LLM-specific knobs that follow. The translation_batch_size
+    # field (LLM-only) lives in the Translation model section instead — it's
+    # part of the LLM config block, not the provider block.
+    {"key": "default_translation_provider", "section": "Translation",
      "label": "Translation provider — pick your cost tier", "type": "select",
      "options": [
          {"value": "nllb",
@@ -343,57 +358,12 @@ _FIELD_META: list[dict[str, Any]] = [
          "language pairs. Works on both image flavors (uses Intel iGPU via OpenVINO when "
          "available, falls back to CPU torch otherwise — slower but no setup either way).\n"
          "• DeepL — free 500k characters/month (~6 movies), then paid. Excellent quality on "
-         "European and East-Asian pairs. Requires a DeepL API key in the API keys section.\n"
+         "European and East-Asian pairs. The DeepL API key field appears below when you pick this.\n"
          "• LLM — uses whatever you configure in the Translation model section. Highest "
          "quality, supports any language pair. Free if you point at local Ollama / LM Studio. "
          "Paid per-token if you point at Anthropic / OpenAI / OpenRouter / etc. The only "
          "provider that benefits from scene/cinematic visual context."
      )},
-    {"key": "default_mode", "section": "Defaults",
-     "label": "Quality tier — pick your call-volume tier", "type": "select",
-     "options": [
-         {"value": "audio",
-          "label": "audio · [+0 LLM calls beyond translation] whisper only · works with any provider · cheapest · default"},
-         {"value": "scene",
-          "label": "scene · [+~20 vision-LLM calls/film] adds scene bible · improves pronouns/gender · needs Vision model + provider=llm"},
-         {"value": "cinematic",
-          "label": "cinematic · [+1 LLM call per cue with image] adds per-cue frame to translation · most expensive · needs vision-capable Translation model"},
-     ],
-     "help": (
-         "Higher tier = more visual context for the translator = better quality on tricky "
-         "scenes, but more LLM calls.\n"
-         "• audio uses Whisper only. No vision. Works with any provider (NLLB/DeepL/LLM).\n"
-         "• scene runs ffmpeg scene-detection, sends one keyframe per shot to the Vision LLM "
-         "for a 1-2 sentence description, then feeds the resulting bible to the translator as "
-         "cached system context. Requires Vision model section configured AND provider=llm.\n"
-         "• cinematic does what scene does AND additionally attaches one keyframe per cue to "
-         "the translation call so the translator literally sees each moment. Requires the "
-         "Translation model to be vision-capable AND provider=llm."
-     )},
-    {"key": "default_skip_if_target_audio_exists", "section": "Defaults",
-     "label": "Skip when target-language audio is already present", "type": "checkbox",
-     "help": "If the file already has audio in the target language, do nothing. Saves "
-             "compute on items where the user can just switch audio track in their player."},
-    {"key": "write_detected_language_to_file", "section": "Defaults",
-     "label": "Tag detected source language back into the source file (MKV only)", "type": "checkbox",
-     "help": "When a film's audio track has no language tag (Emby just shows 'Audio'), "
-             "language detection runs differently per backend: the OpenVINO STT backend "
-             "needs a Whisper-tiny pre-pass on the first 30s of audio (it can't surface "
-             "its own auto-detection through the optimum-intel API), while the CPU/"
-             "faster-whisper backend detects internally during the main transcribe call "
-             "at zero extra cost. Either way the transcription gets the right language. "
-             "With this checkbox ON, we ALSO write the detected language back into the "
-             "file's EBML header via `mkvpropedit` — instant, modifies only metadata, "
-             "NEVER touches the audio/video data sections. Restricted to MKV/MKA/WebM. "
-             "Non-Matroska containers (MP4/MOV/AVI/...) are deliberately left untouched: "
-             "an ffmpeg remux would technically preserve audio byte-for-byte but rewrites "
-             "the whole file with documented edge cases (timestamp re-derivation, lost "
-             "custom metadata) — not worth the risk on a media library. Detection still "
-             "drives transcription correctness regardless of container; only the persist-"
-             "to-Emby step is skipped for non-MKV. Turn off entirely to keep all source "
-             "files completely pristine."},
-
-    # ── Translation (provider-agnostic params) ────────────────────────────────
     {"key": "nllb_model", "section": "Translation",
      "label": "NLLB model variant", "type": "select",
      "show_if": {"field": "default_translation_provider", "equals": "nllb"},
@@ -409,11 +379,6 @@ _FIELD_META: list[dict[str, Any]] = [
      ],
      "help": "Meta NLLB-200 model size. Bigger = better translations but slower and more RAM. "
              "First use of a variant downloads the weights (one-off, cached in /cache/nllb-models)."},
-    {"key": "translation_batch_size", "section": "Translation",
-     "label": "Cues per LLM batch", "type": "number",
-     "show_if": {"field": "default_translation_provider", "equals": "llm"},
-     "help": "Only used when provider=LLM. Higher = fewer round-trips, lower = more granular "
-             "failures and retries. 30 is a good balance."},
     {"key": "nllb_batch_size", "section": "Translation",
      "label": "Cues per NLLB batch", "type": "number",
      "show_if": {"field": "default_translation_provider", "equals": "nllb"},
@@ -426,8 +391,19 @@ _FIELD_META: list[dict[str, Any]] = [
      "help": "Only used when provider=DeepL. DeepL caps a single request at 50 "
              "texts, so this is also the upper bound. Lower it for more granular "
              "retry behavior at the cost of more round-trips."},
+    {"key": "deepl_api_key", "section": "Translation",
+     "label": "DeepL API key", "type": "password",
+     "show_if": {"field": "default_translation_provider", "equals": "deepl"},
+     "help": "Required when provider = DeepL. Free-tier keys end in ':fx' "
+             "(auto-detected — Babel routes to api-free.deepl.com vs api.deepl.com). "
+             "Sign up at https://www.deepl.com/pro-api — Free plan gives 500k chars/month."},
 
     # ── Translation model (only used when provider=llm) ───────────────────────
+    {"key": "translation_batch_size", "section": "Translation model",
+     "label": "Cues per LLM batch", "type": "number",
+     "help": "Higher = fewer round-trips, lower = more granular failures and retries. "
+             "30 is a good balance. Only affects the LLM provider — NLLB and DeepL have "
+             "their own batch sizes in the Translation section above."},
     {"key": "translation_llm_type", "section": "Translation model",
      "label": "Wire protocol", "type": "select",
      "options": [
@@ -550,11 +526,42 @@ _FIELD_META: list[dict[str, Any]] = [
      "label": "Max lines per cue", "type": "number",
      "help": "Overflow merges into the last line — never drops content."},
 
-    # ── API keys ──────────────────────────────────────────────────────────────
-    {"key": "deepl_api_key", "section": "API keys",
-     "label": "DeepL API key", "type": "password",
-     "help": "Required when Translation provider = DeepL. Free-tier keys end in ':fx' "
-             "(auto-detected — Babel routes to api-free.deepl.com vs api.deepl.com)."},
+    # ── Resource safety (advanced — sits at the bottom of the form) ─────────
+    # These caps prevent a long film + heavy mode from consuming all host
+    # RAM. They complement the cgroup limits in docker-compose.yml.
+    {"key": "job_timeout_seconds", "section": "Resource safety",
+     "label": "Job wall-clock timeout (seconds)", "type": "number",
+     "help": "Hard cap on a single job's runtime. 5400 = 90 min — generous for "
+             "a 3 h film at whisper-large on int8 CPU. Set to 0 to disable. "
+             "Enforced at every pipeline checkpoint (between audio segments, "
+             "between translation batches, between scene-detect ffmpeg lines) "
+             "so a wedged job can't hold the queue indefinitely."},
+    {"key": "stt_audio_segment_seconds", "section": "Resource safety",
+     "label": "OpenVINO STT audio-segment size (seconds)", "type": "number",
+     "help": "How much audio is loaded into RAM at once for the OpenVINO "
+             "Whisper backend. 600 = 10 min, ~75 MB resident regardless of "
+             "film length. Lower values reduce RAM further; higher values "
+             "have fewer segment-boundary cue splits. Ignored when "
+             "whisper_backend = cpu (faster-whisper streams from disk on its own)."},
+    {"key": "cinematic_max_cues_with_frames", "section": "Resource safety",
+     "label": "Cinematic — max cues that get a frame attached", "type": "number",
+     "help": "Hard cap on per-cue frame extraction in cinematic mode. A 2 h+ "
+             "dialog-heavy film can produce 1500+ cues — pre-extracting one "
+             "JPEG per cue is what caused the original TrueNAS OOM. With this "
+             "cap, only the first N cues ship frames; remaining cues translate "
+             "text-only (still using the scene bible). Set to 0 to disable "
+             "per-cue frames entirely (cinematic ≈ scene mode)."},
+
+    # ── Security ────────────────────────────────────────────────────────────
+    {"key": "auth_credentials", "section": "Security",
+     "label": "HTTP Basic credentials (user:password)", "type": "password",
+     "help": "Leave BLANK for no auth (default — preserves zero-config first "
+             "boot). Set to 'user:password' to require Basic auth on every "
+             "endpoint except /health. Adds a same-origin check on POST/PATCH/"
+             "PUT/DELETE so a malicious LAN page can't ride your saved browser "
+             "credentials to start jobs. Apply this on any network where you "
+             "wouldn't trust every device — the Library page can queue jobs "
+             "that consume your LLM quota."},
 ]
 
 
