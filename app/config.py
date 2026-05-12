@@ -236,6 +236,22 @@ class _EnvSettings(BaseSettings):
     # work without credentials.
     auth_credentials: str | None = None
 
+    # Optional shell command run by the "Update now" button on the
+    # dashboard. Empty (default) means the button is hidden — clicking
+    # "Check for updates" only surfaces the version comparison +
+    # copy-paste commands. With a value set (e.g.
+    # ``cd /mnt/.../subtitle-this && git pull && docker compose build &&
+    # docker compose up -d``), the button executes that command via
+    # subprocess and streams the output to the UI.
+    #
+    # Security: env-var-only by design — not exposed in the Settings
+    # UI for editing. The command is YOURS, not user-supplied input,
+    # so there's no injection path. Running it still requires whatever
+    # privileges the container has — typically docker socket access
+    # (mount /var/run/docker.sock if you want the command to invoke
+    # docker compose).
+    update_command: str | None = None
+
     # Media server (Emby / Jellyfin / Plex). Type drives:
     # - which client class is built (Emby+Jellyfin share one impl, Plex has its own)
     # - the auth header convention (X-Emby-Token vs X-Plex-Token)

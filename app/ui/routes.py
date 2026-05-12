@@ -734,6 +734,12 @@ def dashboard(request: Request) -> HTMLResponse:
         if request.query_params.get("skip_wizard") != "1":
             return RedirectResponse(url="/onboarding", status_code=303)
 
+    # Show the update-banner section unconditionally; the in-template
+    # logic handles "couldn't check" / "up to date" / "available"
+    # rendering. The button-to-execute is gated on update_run_enabled
+    # (BABEL_UPDATE_COMMAND env var present) so we pass that flag
+    # through here rather than have the template introspect settings.
+    from app import updates as updates_mod
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -742,6 +748,7 @@ def dashboard(request: Request) -> HTMLResponse:
             "server_configured": bool(settings.media_server_url and settings.media_server_api_key),
             "settings": settings.all_values(mask_sensitive=True),
             "active": "dashboard",
+            "update_run_enabled": updates_mod.update_run_enabled(),
         },
     )
 

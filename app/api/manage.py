@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 _log = logging.getLogger("subtitle_this")
 
-from app import cache_explorer, jobs
+from app import cache_explorer, jobs, updates as updates_mod
 from app.config import settings
 from app.processor import (
     BadRequest, ProcessRequest, process, validate_mode_provider_combo,
@@ -530,6 +530,35 @@ def cache_vtt_stats(cache_key: str) -> dict:
 @router.post("/cache/vtt/clear-all")
 def cache_clear_all_vtt() -> dict:
     return {"cleared": cache_explorer.clear_all_vtt_entries()}
+
+
+# ── App update ────────────────────────────────────────────────────────────
+
+
+@router.get("/update/check")
+def update_check(force: bool = False) -> dict:
+    """Query GitHub Releases for the latest tag and report whether
+    the running app is behind. Cached for 1 h to stay under GitHub's
+    unauthenticated rate limit; pass ``?force=1`` to bypass the cache
+    (used by the dashboard's "Check now" button)."""
+    return updates_mod.check_for_update(force_refresh=force).to_dict()
+
+
+@router.post("/update/run")
+def update_run() -> dict:
+    """Execute the operator-configured update command (env var
+    BABEL_UPDATE_COMMAND). Returns the command's combined stdout/stderr
+    plus its return code. 412 when the env var isn't set — the UI
+    button is hidden in that state but we re-check defensively."""
+    res = updates_mod.run_update_command()
+    if not res.enabled:
+        raise HTTPException(
+            412,
+            "Update command isn't configured. Set BABEL_UPDATE_COMMAND "
+            "in your container's environment and restart to enable "
+            "the one-click update button.",
+        )
+    return res.to_dict()
 
 
 @router.post("/cache/transcripts/clear-all")

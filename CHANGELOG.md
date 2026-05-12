@@ -7,6 +7,63 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.16] — 2026-05-12
+
+App-update awareness in the dashboard. The app connects to its own
+GitHub releases API and tells you whether you're running the
+latest version. Optional one-click update execution behind an
+opt-in env var.
+
+### Added
+
+- New module `app/updates.py` with two surfaces:
+  - `check_for_update()` queries
+    `https://api.github.com/repos/damienigg/subtitle-this/releases/latest`,
+    compares the tag to `app.__version__`, and returns a structured
+    `UpdateStatus`. Cached for 1 hour to stay under GitHub's
+    60 req/hr unauthenticated rate limit. Network/API errors
+    surface as `error` on the result rather than raising.
+  - `run_update_command()` runs whatever the operator stashed in
+    the new `BABEL_UPDATE_COMMAND` env var (e.g.
+    `cd /mnt/.../subtitle-this && git pull && docker compose build
+    && docker compose up -d`). Returns the command's combined
+    stdout/stderr + return code. 15-minute hard ceiling. Empty
+    env var = button hidden = no execution.
+- New API endpoints:
+  - `GET /api/update/check?force=0|1` — returns the status JSON
+  - `POST /api/update/run` — executes the configured command, or
+    HTTP 412 when none is set
+- New **update banner** at the top of the Dashboard. Color-graded
+  by status: green = up to date, amber = update available,
+  muted = couldn't check. Always shows a "Check now" button that
+  forces a fresh GitHub query. When `BABEL_UPDATE_COMMAND` is
+  set AND an update is available, an additional "Update now"
+  button executes the command and streams the output into a
+  `<details>` block on the same card.
+
+### Configuration
+
+- New env var `BABEL_UPDATE_COMMAND` (defaults to empty). Set to
+  any shell command you want triggered by the "Update now"
+  button. The command is operator-controlled by definition (env
+  var, not Settings UI), so there's no user-input injection path.
+  Self-update from inside a container still requires the
+  container to have the privileges its command needs — typically
+  a mounted docker socket and the docker CLI present. For most
+  setups, the safer-and-simpler alternative is to set up
+  `containrrr/watchtower` as a sibling service; the in-app
+  button is convenient for build-from-source setups where
+  watchtower wouldn't help.
+
+### Tests
+
+- 15 tests in `tests/test_updates.py` covering version parsing
+  (with v-prefix and pre-release suffix), comparison, the
+  cached/forced GitHub fetch paths, error-graceful surfacing
+  (404, network), release-notes truncation, and the
+  enabled/disabled gating of the executor.
+- 2 smoke tests on the new API endpoints.
+
 ## [0.7.15] — 2026-05-12
 
 ### Fixed

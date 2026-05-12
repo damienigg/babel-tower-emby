@@ -2,6 +2,35 @@
 {% block title %}Subtitle This — Dashboard{% endblock %}
 
 {% block content %}
+{# ── App-update banner ─────────────────────────────────────────
+   Hydrated client-side on page load by hitting /api/update/check.
+   Stays hidden until the response lands so the dashboard doesn't
+   flash an empty card on every render. The Check / Update buttons
+   live inside the card itself; the Update button is only injected
+   when the backend reports update_run_enabled = true. #}
+<section id="update-banner" class="update-banner" hidden>
+  <div class="update-banner-row">
+    <div class="update-banner-text">
+      <strong id="update-headline">Checking for updates…</strong>
+      <div id="update-detail" class="muted small"></div>
+    </div>
+    <div class="update-banner-actions">
+      <button type="button" id="update-check-btn" class="secondary outline">
+        Check now
+      </button>
+      {% if update_run_enabled %}
+      <button type="button" id="update-run-btn" class="primary" hidden>
+        Update now
+      </button>
+      {% endif %}
+    </div>
+  </div>
+  <details id="update-output-wrap" hidden>
+    <summary class="muted small">Update output</summary>
+    <pre id="update-output" class="update-output"></pre>
+  </details>
+</section>
+
 {# Cards reflect the actual config that drives jobs — we conditionally
    render the LLM cards because they're irrelevant when provider=nllb or
    provider=deepl, and the Vision card only when scene/cinematic mode
@@ -158,6 +187,103 @@
     }
     refresh();
     setInterval(refresh, 10000);
+  })();
+</script>
+
+{# ── App-update banner hydrator ─────────────────────────────
+   Reveals the banner on page load with the result of /api/update/check
+   (1 h cached server-side). The Check button forces a fresh GitHub
+   query. The Update button (only present when update_run_enabled
+   is true) POSTs to /api/update/run and streams the output into
+   the <details> block. #}
+<script>
+  (function() {
+    const banner = document.getElementById('update-banner');
+    const headline = document.getElementById('update-headline');
+    const detail = document.getElementById('update-detail');
+    const checkBtn = document.getElementById('update-check-btn');
+    const runBtn = document.getElementById('update-run-btn');
+    const outputWrap = document.getElementById('update-output-wrap');
+    const outputEl = document.getElementById('update-output');
+    if (!banner) return;
+
+    function render(data) {
+      banner.hidden = false;
+      banner.classList.remove('update-fresh', 'update-stale', 'update-error');
+      if (data.error) {
+        headline.textContent = 'Could not check for updates';
+        detail.textContent = data.error + ' — current version ' + data.current_version;
+        banner.classList.add('update-error');
+        if (runBtn) runBtn.hidden = true;
+      } else if (data.update_available) {
+        headline.textContent = '🆕 Update available — v' + data.latest_version;
+        detail.innerHTML =
+          'You are on v' + data.current_version + '. '
+          + '<a href="' + data.release_url + '" target="_blank" rel="noopener">'
+          + 'Release notes ↗</a>';
+        banner.classList.add('update-stale');
+        if (runBtn) runBtn.hidden = false;
+      } else {
+        headline.textContent = '✓ You are up to date';
+        detail.textContent = 'Running v' + (data.current_version || '?')
+          + (data.latest_version ? ' · GitHub latest v' + data.latest_version : '');
+        banner.classList.add('update-fresh');
+        if (runBtn) runBtn.hidden = true;
+      }
+    }
+
+    async function check(force) {
+      checkBtn.disabled = true;
+      const wasText = checkBtn.textContent;
+      checkBtn.textContent = '…';
+      try {
+        const r = await fetch('/api/update/check' + (force ? '?force=1' : ''));
+        const data = await r.json();
+        render(data);
+      } catch (e) {
+        render({ error: String(e), current_version: '?' });
+      } finally {
+        checkBtn.disabled = false;
+        checkBtn.textContent = wasText;
+      }
+    }
+
+    if (runBtn) {
+      runBtn.addEventListener('click', async () => {
+        if (!confirm('Run the configured update command? The container may restart, briefly closing this tab.')) return;
+        runBtn.disabled = true;
+        checkBtn.disabled = true;
+        const wasText = runBtn.textContent;
+        runBtn.textContent = 'Updating…';
+        outputWrap.hidden = false;
+        outputWrap.open = true;
+        outputEl.textContent = '$ ' + 'running…\n';
+        try {
+          const r = await fetch('/api/update/run', { method: 'POST' });
+          const data = await r.json();
+          outputEl.textContent = data.output || '(no output)';
+          if (data.return_code === 0) {
+            outputEl.textContent += '\n\n[exit 0 — update applied. Reload the page in ~10 s.]';
+          } else if (data.error) {
+            outputEl.textContent += '\n\n[error: ' + data.error + ']';
+          } else {
+            outputEl.textContent += '\n\n[exit ' + data.return_code + ']';
+          }
+        } catch (e) {
+          // If the container restarted mid-request, the fetch throws.
+          // That's actually the expected success case — surface it
+          // accordingly and tell the user to refresh.
+          outputEl.textContent = '[connection dropped — the update may have restarted the container. Refresh the page to see the new version.]';
+        } finally {
+          runBtn.disabled = false;
+          checkBtn.disabled = false;
+          runBtn.textContent = wasText;
+        }
+      });
+    }
+
+    checkBtn.addEventListener('click', () => check(true));
+    check(false);
   })();
 </script>
 {% endblock %}

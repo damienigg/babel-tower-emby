@@ -707,6 +707,48 @@ def test_onboarding_save_redirects_to_library(client, monkeypatch):
     assert runtime_settings._overrides.get("media_server_api_key") == "test-key"
 
 
+def test_update_check_endpoint_returns_current_version(client, monkeypatch):
+    """/api/update/check returns a JSON payload that always has at
+    least the current version. Backend errors surface as ``error``
+    rather than 500ing — the dashboard banner reads them to render
+    a "couldn't check" state."""
+    from app import updates as updates_mod
+
+    # Stub the GitHub call so the test stays offline-safe.
+    class _FakeClient:
+        def __init__(self, *a, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def get(self, url, headers=None):
+            class _R:
+                status_code = 200
+                def json(self):
+                    return {"tag_name": "v99.99.99", "body": "future"}
+            return _R()
+    monkeypatch.setattr(updates_mod.httpx, "Client", _FakeClient)
+    updates_mod._cache.clear()
+
+    from app import __version__
+    r = client.get("/api/update/check?force=1")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["current_version"] == __version__
+    assert body["latest_version"] == "99.99.99"
+    assert body["update_available"] is True
+
+
+def test_update_run_endpoint_412_when_command_not_configured(client, monkeypatch):
+    """POST /api/update/run with no BABEL_UPDATE_COMMAND set returns
+    412 Precondition Failed rather than executing anything."""
+    from app.config import settings as runtime_settings
+    monkeypatch.setattr(
+        runtime_settings, "_overrides",
+        {**runtime_settings._overrides, "update_command": ""},
+    )
+    r = client.post("/api/update/run")
+    assert r.status_code == 412
+
+
 def test_cache_explorer_delete_rejects_path_traversal(client):
     """The HTTP layer must surface ValueError as 400, not let a malformed
     key resolve to an arbitrary file. Most `..` shapes get caught earlier
