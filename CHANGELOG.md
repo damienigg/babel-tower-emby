@@ -7,6 +7,39 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.18] — 2026-05-12
+
+### Added
+
+- **Re-polish from Cache Explorer** — the readability polish pass
+  introduced in 0.7.17 can now be re-applied to any cached .vtt
+  without re-running STT or translation. New "✨" button per row
+  in the Cache Explorer triggers the rewrite; both the cached
+  payload AND the .vtt next to the media (when locatable from the
+  payload's media_path + the NOTE header) are updated in place.
+  Idempotent — running it twice is a near-no-op since already-
+  polished cues are above the duration floor and adjacent
+  candidates have already been merged.
+- New helper `polish_vtt_text(vtt_text) -> str` in
+  `app/pipeline/polish.py`: parses a .vtt back into cue dataclasses
+  (handling NOTE-header capture so provenance survives the round
+  trip), runs ``polish_cues``, re-emits with the original header
+  preserved.
+- New API endpoint ``POST /api/cache/vtt/{cache_key}/repolish``:
+  rewrites the cached payload atomically (.tmp + os.replace),
+  best-effort-writes the .vtt next to the media, and returns
+  before/after cue counts plus a ``disk_vtt_updated`` flag the
+  UI surfaces.
+
+### Tests
+
+- 5 new tests in `tests/test_polish.py` covering the round-trip:
+  extend-in-place via .vtt text, NOTE-header preservation, merge
+  through the text path, near-idempotency, and the empty-input
+  passthrough.
+- 1 smoke test asserts the HTTP endpoint rewrites the cached
+  .vtt and returns the cue-count delta.
+
 ## [0.7.17] — 2026-05-12
 
 Readability polish — addresses the user complaint that generated

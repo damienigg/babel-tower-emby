@@ -88,6 +88,10 @@
                     data-key="{{ e.cache_key }}"
                     data-label="{{ e.media_name or e.cache_key }}"
                     title="Download stats JSON for this entry">💾</button>
+            <button type="button" class="secondary outline repolish-vtt-btn action-btn"
+                    data-keys="{{ e.cache_keys | join(',') }}"
+                    data-label="{{ e.media_name or e.cache_key }}"
+                    title="Re-apply readability polish to the cached .vtt (no STT/translation re-run)">✨</button>
             <button type="button" class="secondary outline delete-vtt-btn"
                     data-keys="{{ e.cache_keys | join(',') }}"
                     data-label="{{ e.media_name or e.cache_key }}"
@@ -257,5 +261,45 @@
   );
   wireClearAllButton('.clear-all-vtt-btn', '/api/cache/vtt/clear-all', 'VTT cache');
   wireClearAllButton('.clear-all-transcripts-btn', '/api/cache/transcripts/clear-all', 'transcript');
+
+  // Re-polish handler. POSTs /api/cache/vtt/{key}/repolish for every
+  // file in the row's cache_keys group (the two-level cache stores
+  // one logical entry under both quick-fp and content-fp keys; we
+  // re-polish each so the next lookup hits a polished payload).
+  // After completion, reload so the stats / cue counts reflect the
+  // new state.
+  document.querySelectorAll('.repolish-vtt-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const label = btn.dataset.label || btn.dataset.keys;
+      if (!confirm('Re-apply readability polish to "' + label + '"? The cached .vtt and the .vtt next to your media are both rewritten in place. No STT or translation re-run.')) return;
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = '…';
+      try {
+        const keys = (btn.dataset.keys || '').split(',').filter(Boolean);
+        const results = await Promise.all(keys.map(k =>
+          fetch('/api/cache/vtt/' + encodeURIComponent(k) + '/repolish', { method: 'POST' })
+            .then(r => r.json())
+        ));
+        // Surface the delta: how many cues before / after on the
+        // first response (all keys produce the same payload result).
+        const r0 = results[0] || {};
+        const before = r0.before_cue_count || 0;
+        const after = r0.after_cue_count || 0;
+        alert(
+          'Re-polished "' + label + '"\n\n' +
+          'Cue count: ' + before + ' → ' + after + '\n' +
+          (r0.disk_vtt_updated
+            ? 'Wrote polished .vtt next to media.'
+            : 'Cached payload updated. (Could not locate .vtt next to media — refresh from cache on next job.)')
+        );
+        window.location.reload();
+      } catch (e) {
+        alert('Re-polish failed: ' + e);
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  });
 </script>
 {% endblock %}

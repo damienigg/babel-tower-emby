@@ -96,6 +96,75 @@ def _merge_adjacent(cues: list[Cue]) -> list[Cue]:
     return out
 
 
+def polish_vtt_text(vtt_text: str) -> str:
+    """Re-polish an already-written .vtt without re-running STT or
+    translation. Parses the cues from the input text, runs them
+    through ``polish_cues``, and re-emits a new .vtt preserving the
+    original header note (``NOTE Subtitle This auto-subs (...)``)
+    so the metadata trail stays intact across the polish cycle.
+
+    Idempotent in practice: a second pass on an already-polished
+    .vtt produces nearly-identical output (already-long cues are
+    above the floor, already-merged cues no longer have eligible
+    neighbors). Empty inputs or .vtts with no parseable cues
+    pass through unchanged."""
+    from app.pipeline.vtt import to_webvtt
+    cues, header_note = _parse_vtt_to_cues(vtt_text)
+    if not cues:
+        return vtt_text
+    polished = polish_cues(cues)
+    return to_webvtt(polished, header_note=header_note)
+
+
+def _parse_vtt_to_cues(vtt_text: str) -> tuple[list[Cue], str | None]:
+    """Parse a .vtt back into the dataclass shape ``polish_cues``
+    expects. Returns the cue list plus the original NOTE-header
+    payload (the text after "NOTE ", or None if no header was
+    present). Multi-line cue text is joined with a single space —
+    line wrapping is re-applied by the writer based on current
+    ``max_line_chars`` / ``max_lines_per_cue`` settings, which may
+    differ from the original."""
+    import re
+    ts_re = re.compile(
+        r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*"
+        r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})"
+    )
+
+    def _to_seconds(h: str, m: str, s: str, ms: str) -> float:
+        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+    note: str | None = None
+    cues: list[Cue] = []
+    next_id = 0
+    for block in vtt_text.split("\n\n"):
+        lines = block.strip().split("\n")
+        if not lines:
+            continue
+        # NOTE blocks come in two shapes: "NOTE\ntext" or "NOTE text".
+        # We keep the FIRST NOTE we encounter (the header), strip the
+        # "NOTE" / "NOTE " prefix, and surface its body verbatim so the
+        # writer re-emits it as ``NOTE <body>``.
+        if note is None and lines[0].startswith("NOTE"):
+            head = lines[0]
+            body_inline = head[4:].lstrip()
+            tail = "\n".join(lines[1:]).strip()
+            note = (body_inline + ("\n" + tail if tail else "")).strip() or None
+            continue
+        # Find the timestamp line; identifier lines optionally precede it.
+        for i, line in enumerate(lines):
+            m = ts_re.match(line.strip())
+            if not m:
+                continue
+            start_s = _to_seconds(*m.group(1, 2, 3, 4))
+            end_s = _to_seconds(*m.group(5, 6, 7, 8))
+            text = " ".join(lines[i + 1:]).strip()
+            if text and end_s > start_s:
+                cues.append(Cue(id=next_id, start=start_s, end=end_s, text=text))
+                next_id += 1
+            break
+    return cues, note
+
+
 def _extend_min_duration(cues: list[Cue]) -> list[Cue]:
     """For each cue, ensure its on-screen duration meets the higher
     of two minima:

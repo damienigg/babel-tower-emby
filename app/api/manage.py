@@ -532,6 +532,83 @@ def cache_clear_all_vtt() -> dict:
     return {"cleared": cache_explorer.clear_all_vtt_entries()}
 
 
+@router.post("/cache/vtt/{cache_key}/repolish")
+def cache_repolish_vtt(cache_key: str) -> dict:
+    """Re-apply the readability polish pass to an already-cached VTT
+    without re-running STT or translation. Updates BOTH the on-disk
+    cache payload AND the .vtt file next to the media (when the path
+    is recoverable from the payload's ``media_path`` + the NOTE
+    header's target_lang/mode). Returns the before/after cue counts
+    so the UI can confirm what changed."""
+    import json
+    from pathlib import Path
+    from app.pipeline.polish import polish_vtt_text
+
+    try:
+        cache_explorer._validate_cache_key(cache_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    path = Path(settings.cache_dir) / f"{cache_key}.json"
+    if not path.is_file():
+        raise HTTPException(404, f"VTT cache entry {cache_key!r} not found")
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise HTTPException(500, f"unreadable cache entry: {e}")
+    if not isinstance(payload, dict) or not payload.get("vtt"):
+        raise HTTPException(404, f"entry {cache_key!r} has no .vtt content")
+
+    old_vtt = payload["vtt"]
+    new_vtt = polish_vtt_text(old_vtt)
+
+    # Persist the polished VTT back to the cache payload atomically.
+    payload["vtt"] = new_vtt
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload))
+    import os as _os
+    _os.replace(tmp, path)
+
+    # Best-effort: also overwrite the .vtt next to the media so a
+    # media-server reload picks up the polished version. The path is
+    # recoverable when payload has ``media_path`` AND we can parse
+    # ``target_lang`` + ``mode`` out of the NOTE header.
+    disk_updated = False
+    media_path = payload.get("media_path")
+    if isinstance(media_path, str) and media_path:
+        import re
+        m = re.search(
+            r"NOTE Subtitle This auto-subs "
+            r"\([a-z]{2} -> (?P<tgt>[a-z]{2}), mode=(?P<mode>[a-z]+),",
+            new_vtt,
+        )
+        # Fall back to the payload's stored mode if the NOTE didn't
+        # parse — older entries always carry mode in the payload.
+        mode = (m.group("mode") if m else None) or payload.get("mode")
+        tgt = m.group("tgt") if m else None
+        if mode and tgt:
+            media = Path(media_path)
+            disk_path = media.with_name(
+                f"{media.stem}.{tgt}.{mode}.ai.vtt"
+            )
+            if disk_path.parent.is_dir():
+                try:
+                    disk_path.write_text(new_vtt, encoding="utf-8")
+                    disk_updated = True
+                except OSError:
+                    pass
+
+    # Cue count delta — surface it so the UI can tell the operator
+    # "merged N cues, extended M" in one number.
+    def _count_cues(text: str) -> int:
+        return len([1 for line in text.splitlines() if " --> " in line])
+
+    return {
+        "before_cue_count": _count_cues(old_vtt),
+        "after_cue_count": _count_cues(new_vtt),
+        "disk_vtt_updated": disk_updated,
+    }
+
+
 # ── App update ────────────────────────────────────────────────────────────
 
 

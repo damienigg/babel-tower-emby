@@ -227,3 +227,91 @@ def test_ids_are_resequenced_after_merge():
 
 def test_empty_input_returns_empty():
     assert polish_cues([]) == []
+
+
+# ── polish_vtt_text: round-trip through .vtt text ──────────────────────────
+
+
+def _make_vtt(*cues: tuple[str, str, str], note: str | None = None) -> str:
+    """Build a synthetic .vtt for the round-trip tests."""
+    parts = ["WEBVTT", ""]
+    if note:
+        parts.append(f"NOTE {note}")
+        parts.append("")
+    for s, e, text in cues:
+        parts.append(f"{s} --> {e}")
+        parts.append(text)
+        parts.append("")
+    return "\n".join(parts)
+
+
+def test_polish_vtt_text_extends_short_cues_in_place():
+    """A .vtt with a too-brief cue gets the same cue extended after
+    the round-trip — proves the parse → polish → re-emit path
+    preserves and lengthens correctly."""
+    from app.pipeline.polish import polish_vtt_text
+    src = _make_vtt(("00:00:10.000", "00:00:10.300", "Yes."))
+
+    out = polish_vtt_text(src)
+
+    # The polished output's cue end is now beyond 10.3s (extended
+    # to the 1.2s floor → end ≈ 11.2s).
+    assert "00:00:11.200" in out or "00:00:11.20" in out, out
+
+
+def test_polish_vtt_text_preserves_note_header():
+    """The NOTE Subtitle-This-auto-subs header carries provenance
+    (whisper model, provider, langs) — it MUST survive the
+    re-polish round-trip so downstream metadata parsers (stats
+    page, Cache Explorer) still recognize the entry."""
+    from app.pipeline.polish import polish_vtt_text
+    src = _make_vtt(
+        ("00:00:10.000", "00:00:10.300", "Yes."),
+        note="Subtitle This auto-subs (en -> fr, mode=audio, "
+             "whisper=large-v3-turbo, provider=nllb)",
+    )
+
+    out = polish_vtt_text(src)
+
+    assert "Subtitle This auto-subs (en -> fr, mode=audio" in out
+    assert "whisper=large-v3-turbo" in out
+
+
+def test_polish_vtt_text_merges_adjacent_short_cues():
+    """End-to-end merge through the .vtt text path: two short
+    adjacent cues collapse, and the resulting .vtt has only one
+    cue block."""
+    from app.pipeline.polish import polish_vtt_text
+    src = _make_vtt(
+        ("00:00:10.000", "00:00:10.400", "Yes,"),
+        ("00:00:10.500", "00:00:10.900", "of course."),
+    )
+
+    out = polish_vtt_text(src)
+
+    cue_lines = [l for l in out.splitlines() if " --> " in l]
+    assert len(cue_lines) == 1, cue_lines
+    assert "Yes, of course." in out
+
+
+def test_polish_vtt_text_is_near_idempotent():
+    """Re-running the polish on an already-polished output must not
+    keep mutating cues indefinitely. The second pass produces the
+    same cue boundaries as the first (allowing for floating-point
+    millisecond noise in the timestamp formatter)."""
+    from app.pipeline.polish import polish_vtt_text
+    src = _make_vtt(
+        ("00:00:10.000", "00:00:10.300", "Yes."),
+        ("00:01:05.000", "00:01:05.500", "Hello there."),
+    )
+    once = polish_vtt_text(src)
+    twice = polish_vtt_text(once)
+    # Same cue COUNT and same cue boundaries.
+    once_ts = [l for l in once.splitlines() if " --> " in l]
+    twice_ts = [l for l in twice.splitlines() if " --> " in l]
+    assert once_ts == twice_ts
+
+
+def test_polish_vtt_text_empty_passes_through():
+    from app.pipeline.polish import polish_vtt_text
+    assert polish_vtt_text("WEBVTT\n\n") == "WEBVTT\n\n"

@@ -707,6 +707,45 @@ def test_onboarding_save_redirects_to_library(client, monkeypatch):
     assert runtime_settings._overrides.get("media_server_api_key") == "test-key"
 
 
+def test_cache_repolish_endpoint_rewrites_vtt_in_place(client, tmp_path, monkeypatch):
+    """End-to-end repolish flow: write a cache payload with a tight
+    cue, POST to /api/cache/vtt/{key}/repolish, verify the cached
+    .vtt now has an extended cue. Proves the parse → polish → write
+    path works through the HTTP layer."""
+    import json
+    from app.config import settings as runtime_settings
+    cache_dir = _redirect_cache_dir(tmp_path, monkeypatch)
+
+    src_vtt = (
+        "WEBVTT\n\n"
+        "NOTE Subtitle This auto-subs (en -> fr, mode=audio, "
+        "whisper=small, provider=nllb)\n\n"
+        "00:00:10.000 --> 00:00:10.300\nYes.\n"
+    )
+    payload = {
+        "vtt": src_vtt,
+        "media_path": "/m/nonexistent.mkv",   # path won't resolve → disk write is skipped
+        "mode": "audio",
+        "cue_count": 1,
+    }
+    (cache_dir / "abc12345.json").write_text(json.dumps(payload))
+
+    r = client.post("/api/cache/vtt/abc12345/repolish")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["before_cue_count"] == 1
+    assert body["after_cue_count"] == 1
+    # disk_vtt_updated stays False here because /m/nonexistent.mkv
+    # parent directory doesn't exist — we only write when a real
+    # media folder is reachable.
+    assert body["disk_vtt_updated"] is False
+
+    # The cached payload now carries a polished .vtt — the original
+    # 0.3 s cue stretched out toward the 1.2 s floor.
+    persisted = json.loads((cache_dir / "abc12345.json").read_text())
+    assert "00:00:11.20" in persisted["vtt"] or "00:00:11.200" in persisted["vtt"]
+
+
 def test_update_check_endpoint_returns_current_version(client, monkeypatch):
     """/api/update/check returns a JSON payload that always has at
     least the current version. Backend errors surface as ``error``
