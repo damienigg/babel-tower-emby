@@ -264,10 +264,10 @@ def to_jsonable(stats: VttStats) -> dict[str, Any]:
 
 
 def write_sidecar(vtt_path, stats: VttStats) -> None:
-    """Write ``{vtt_path}.stats.json`` atomically (tmp + os.replace) so
-    a kill mid-write can't leave a half-written file. Best-effort —
-    swallow IO errors with a warning so the job's actual completion
-    isn't held hostage by a metrics write."""
+    """Deprecated alias for backward compatibility — writes ``{vtt_path}.stats.json``
+    next to the .vtt. Kept for tests that still exercise the legacy
+    path. Production code uses ``write_cache_sidecar`` which lives
+    inside cache_dir/stats/ so the user's movie folder stays clean."""
     import json
     import logging
     import os
@@ -282,3 +282,56 @@ def write_sidecar(vtt_path, stats: VttStats) -> None:
         os.replace(tmp, target)
     except OSError as e:
         log.warning("stats sidecar write failed for %s: %s", target, e)
+
+
+def cache_sidecar_path(cache_key: str) -> "Path":
+    """Resolve the stats sidecar's on-disk path for a given VTT cache
+    key. Single source of truth — both writer and Cache Explorer use
+    this so a future relocation only changes one line."""
+    from pathlib import Path
+    from app.config import settings
+    return Path(settings.cache_dir) / "stats" / f"{cache_key}.json"
+
+
+def write_cache_sidecar(cache_key: str, stats: VttStats) -> None:
+    """Atomically persist the stats record under
+    ``cache_dir/stats/{cache_key}.json``. Same cache_key the VTT cache
+    payload uses, so pair-lookup is trivial (both writers ran).
+
+    Best-effort: IO errors are logged and swallowed. The Cache
+    Explorer's stats page can still regenerate the record on demand
+    from the VTT cache payload even if the sidecar is missing —
+    the sidecar is a convenience for shell-level inspection and
+    backup, not a correctness dependency."""
+    import json
+    import logging
+    import os
+    from pathlib import Path
+
+    log = logging.getLogger("subtitle_this")
+    target = cache_sidecar_path(cache_key)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(to_jsonable(stats), indent=2))
+        os.replace(tmp, target)
+    except OSError as e:
+        log.warning("stats sidecar write failed for %s: %s", target, e)
+
+
+def delete_cache_sidecar(cache_key: str) -> bool:
+    """Remove the stats sidecar for a VTT cache key, if it exists.
+    Returns True if a file was removed. Called from the Cache
+    Explorer's delete path so a row's stats vanish with its parent."""
+    target = cache_sidecar_path(cache_key)
+    try:
+        target.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        import logging
+        logging.getLogger("subtitle_this").warning(
+            "stats sidecar delete failed for %s", target, exc_info=True,
+        )
+        return False

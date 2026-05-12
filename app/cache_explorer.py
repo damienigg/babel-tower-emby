@@ -166,7 +166,12 @@ def delete_vtt_entry(cache_key: str) -> bool:
     """Delete cache_dir/{cache_key}.json. Returns True if a file was
     removed, False if nothing existed there. Raises ValueError if the
     key contains anything suspicious — defense in depth against an HTTP
-    handler accidentally forwarding a path-traversal value."""
+    handler accidentally forwarding a path-traversal value.
+
+    Also removes the paired stats sidecar at
+    ``cache_dir/stats/{cache_key}.json`` so the two artefacts go
+    away together — otherwise the explorer would list a phantom
+    sidecar that points to a deleted entry."""
     _validate_cache_key(cache_key)
     path = Path(settings.cache_dir) / f"{cache_key}.json"
     # Guard against /settings.json or /jobs.json being targeted via a
@@ -176,6 +181,13 @@ def delete_vtt_entry(cache_key: str) -> bool:
     if not path.is_file():
         return False
     path.unlink()
+    # Best-effort sidecar cleanup — never fail the parent delete on
+    # a missing/un-deletable sidecar.
+    try:
+        from app import stats as stats_mod
+        stats_mod.delete_cache_sidecar(cache_key)
+    except Exception:
+        pass
     return True
 
 

@@ -180,6 +180,90 @@ def test_whisper_aggregator_counts_degenerate_drops():
 # ── Serialization ──────────────────────────────────────────────────────────
 
 
+# ── TranslationMetrics ────────────────────────────────────────────────────
+
+
+def _cue(text: str, i: int = 0):
+    """Minimal Cue stand-in — only `text` is read by
+    compute_translation_metrics, so we avoid pulling in the real
+    dataclass to keep this test free of pipeline imports."""
+    class _C:
+        pass
+    c = _C()
+    c.text = text
+    c.id = i
+    return c
+
+
+def test_translation_metrics_char_ratio_and_counts():
+    """Baseline path: 3 input cues → 3 output cues, French is longer
+    so char_ratio > 1.0 (en→fr typically lands in 1.10-1.25)."""
+    from app.pipeline_metrics import compute_translation_metrics
+    input_cues = [_cue("Hello world", 0), _cue("How are you", 1), _cue("Fine thanks", 2)]
+    output_cues = [_cue("Bonjour le monde", 0), _cue("Comment allez-vous", 1),
+                   _cue("Bien merci", 2)]
+
+    m = compute_translation_metrics(
+        provider="nllb", model="facebook/nllb-200-distilled-1.3B",
+        input_cues=input_cues, output_cues=output_cues, took_seconds=42.7,
+    )
+
+    assert m.provider == "nllb"
+    assert m.model == "facebook/nllb-200-distilled-1.3B"
+    assert m.took_seconds == 42.7
+    assert m.input_cue_count == 3
+    assert m.output_cue_count == 3
+    assert m.input_total_chars == sum(len(c.text) for c in input_cues)
+    assert m.output_total_chars == sum(len(c.text) for c in output_cues)
+    assert m.char_ratio > 1.0  # French is longer than English
+
+
+def test_translation_metrics_counts_empty_outputs():
+    """The NLLB-int8-degenerate signature: many cues translate to "".
+    The empty count is the primary signal."""
+    from app.pipeline_metrics import compute_translation_metrics
+    input_cues = [_cue("Line one", 0), _cue("Line two", 1), _cue("Line three", 2)]
+    output_cues = [_cue("", 0), _cue("Une ligne", 1), _cue("   ", 2)]  # 2 empty
+
+    m = compute_translation_metrics(
+        provider="nllb", model="test", input_cues=input_cues,
+        output_cues=output_cues, took_seconds=1.0,
+    )
+
+    assert m.empty_output_count == 2   # "" and "   " both empty
+
+
+def test_translation_metrics_counts_duplicate_outputs():
+    """Model-collapse signature: same translation repeated for many
+    different inputs. Count is "how many cues are part of a
+    duplicate group", not "how many unique strings are duplicated"."""
+    from app.pipeline_metrics import compute_translation_metrics
+    input_cues = [_cue(f"line {i}", i) for i in range(5)]
+    # 3 cues translated to the same "Oui." (a duplicate group of size 3)
+    # 1 cue to "Non." (unique, not duplicated)
+    # 1 cue to "Merci." (unique, not duplicated)
+    output_cues = [_cue("Oui.", 0), _cue("Oui.", 1), _cue("Oui.", 2),
+                   _cue("Non.", 3), _cue("Merci.", 4)]
+
+    m = compute_translation_metrics(
+        provider="nllb", model="test", input_cues=input_cues,
+        output_cues=output_cues, took_seconds=1.0,
+    )
+
+    # 3 instances of "Oui." are in a duplicate group → all 3 count.
+    assert m.duplicate_output_count == 3
+
+
+def test_translation_metrics_empty_inputs_dont_divide_by_zero():
+    from app.pipeline_metrics import compute_translation_metrics
+    m = compute_translation_metrics(
+        provider="nllb", model=None, input_cues=[], output_cues=[],
+        took_seconds=0.0,
+    )
+    assert m.char_ratio == 0.0
+    assert m.input_cue_count == 0
+
+
 def test_to_jsonable_produces_nested_dict():
     """The sidecar and the API both serialize via to_jsonable. None
     sub-records must round-trip as null, not be silently coerced into

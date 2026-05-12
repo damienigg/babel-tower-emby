@@ -72,6 +72,7 @@ def _pm_from_dict(data: dict) -> "PipelineMetrics | None":
         return None
     from app.pipeline_metrics import (
         PipelineMetrics, VadMetrics, PackingMetrics, WhisperMetrics,
+        TranslationMetrics,
     )
     def _construct(cls, src):
         if not isinstance(src, dict):
@@ -84,6 +85,7 @@ def _pm_from_dict(data: dict) -> "PipelineMetrics | None":
         vad=_construct(VadMetrics, data.get("vad")),
         packing=_construct(PackingMetrics, data.get("packing")),
         whisper=_construct(WhisperMetrics, data.get("whisper")),
+        translation=_construct(TranslationMetrics, data.get("translation")),
     )
 
 

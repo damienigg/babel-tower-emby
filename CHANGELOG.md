@@ -7,6 +7,53 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-05-12
+
+Three operator-driven additions out of the post-mortem feedback
+loop: relocate the stats sidecar, add a download button for it,
+and instrument the translation phase that was missing from 0.7.6's
+telemetry.
+
+### Changed
+
+- **Stats sidecar location**: moved from `{vtt_path}.stats.json`
+  (next to the .vtt in the user's movie folder) to
+  `cache_dir/stats/{cache_key}.json` (inside the cache). Movie
+  folders stay clean. The legacy `write_sidecar()` function is
+  kept as a deprecated alias for the tests that exercise it; the
+  hot path now uses `write_cache_sidecar()`.
+- `delete_vtt_entry` in the cache_explorer now also removes the
+  paired stats sidecar, so a row's two files vanish together.
+
+### Added
+
+- **Translation telemetry** — the 4th instrumented phase. New
+  `TranslationMetrics` dataclass in `pipeline_metrics.py`:
+  provider, model id, wall-clock duration, input/output cue
+  counts (mismatch flagged), input/output total characters,
+  char_ratio (en→fr expected 1.10-1.25; way off → content
+  dropped), `empty_output_count` (NLLB int8 quantization
+  degenerate signature; > 5 % triggers a warn), and
+  `duplicate_output_count` (model-collapse signature; > 15 %
+  triggers a warn). Computed in `processor.process()` from
+  outside the provider so the same code works for NLLB / DeepL
+  / LLM with no per-provider hooks.
+- New "Translation" section on the Cache Explorer's stats page
+  with inline thresholds matching the warn classes above.
+- "💾" download button per row in the Cache Explorer. Fetches the
+  stats JSON via the existing API endpoint and triggers a Blob
+  download with a media-name-derived filename
+  (`Inception (2010).BluRay.stats.json`, not the hash) so the
+  file is recognizable when the user copies it off-NAS.
+
+### Tests
+
+- 4 new tests covering `compute_translation_metrics` (char ratio,
+  empty counting, duplicate-group counting, empty-input
+  safety).
+- 2 new tests covering the sidecar relocation (lives inside
+  cache_dir/stats/, paired-delete works).
+
 ## [0.7.6] — 2026-05-12
 
 Per-run pipeline telemetry: the stats sidecar (and the Cache

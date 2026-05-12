@@ -80,6 +80,10 @@
             <a href="/cache/vtt/{{ e.cache_key }}/stats"
                class="secondary outline action-btn"
                title="Quality / coverage stats for this entry">📊</a>
+            <button type="button" class="secondary outline download-stats-btn action-btn"
+                    data-key="{{ e.cache_key }}"
+                    data-label="{{ e.media_name or e.cache_key }}"
+                    title="Download stats JSON for this entry">💾</button>
             <button type="button" class="secondary outline delete-vtt-btn"
                     data-key="{{ e.cache_key }}"
                     data-label="{{ e.media_name or e.cache_key }}"
@@ -199,6 +203,43 @@
     k => '/api/cache/vtt/' + encodeURIComponent(k),
     'Delete the cached subtitle for "{label}"? Next run will re-translate from the transcript cache (if still present) or re-do the full pipeline.',
   );
+
+  // Download stats handler — fetches the JSON record on demand and
+  // serves it as a download with a media-name-derived filename so
+  // the user gets "Inception.stats.json" instead of an opaque hash.
+  function _stripExt(name) {
+    // Strip a single trailing extension (e.g. ".mkv"). Leave nested
+    // dots alone so "Inception (2010).BluRay.mkv" -> "Inception (2010).BluRay".
+    return name.replace(/\.[^./\\]+$/, '');
+  }
+  document.querySelectorAll('.download-stats-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.key;
+      const label = btn.dataset.label || key;
+      const filename = _stripExt(label) + '.stats.json';
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = '…';
+      try {
+        const r = await fetch('/api/cache/vtt/' + encodeURIComponent(key) + '/stats');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const blob = new Blob([await r.text()], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('Download failed: ' + e);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  });
   wireDeleteButtons(
     '.delete-transcript-btn',
     k => '/api/cache/transcripts/' + encodeURIComponent(k),

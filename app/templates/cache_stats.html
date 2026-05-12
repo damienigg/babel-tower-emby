@@ -254,6 +254,60 @@
       </table>
     </section>
   {% endif %}
+
+  {# Translation section #}
+  {% if pm.translation %}
+    {% set tr = pm.translation %}
+    <section>
+      <h2>Translation</h2>
+      <table class="kv">
+        <tr><th>Provider</th><td>{{ tr.provider or '—' }}</td></tr>
+        <tr><th>Model</th><td>{{ tr.model or '—' }}</td></tr>
+        <tr><th>Wall clock</th><td>{{ tr.took_seconds|int|duration }}
+          <span class="muted small">({{ tr.took_seconds }} s)</span></td></tr>
+        <tr><th>Cue count (in / out)</th><td>
+          {{ tr.input_cue_count }} / {{ tr.output_cue_count }}
+          {% if tr.input_cue_count != tr.output_cue_count %}
+            <span class="warn-text small">
+              (in ≠ out — the provider added or merged cues, which usually
+              shouldn't happen)
+            </span>
+          {% endif %}
+        </td></tr>
+        <tr><th>Total characters (in / out)</th><td>
+          {{ tr.input_total_chars }} / {{ tr.output_total_chars }}
+        </td></tr>
+        <tr><th>Char ratio (out/in)</th><td>
+          {{ tr.char_ratio }}
+          <span class="muted small">
+            (en→fr typically 1.10-1.25; en→ja or en→zh much lower; way off
+            the expected band = something dropped content)
+          </span>
+        </td></tr>
+        <tr><th>Empty translations</th><td>
+          {{ tr.empty_output_count }}
+          {% if tr.output_cue_count > 0 %}
+            {% set empty_pct = (100.0 * tr.empty_output_count / tr.output_cue_count) | round(1) %}
+            <span class="{% if empty_pct > 5 %}warn-text{% else %}muted{% endif %} small">
+              ({{ empty_pct }} % — &gt; 5 % suggests NLLB int8 quantization
+              degenerate, or LLM JSON-mode crash; turn
+              <code>nllb_load_in_8bit</code> off and retry)
+            </span>
+          {% endif %}
+        </td></tr>
+        <tr><th>Duplicate translations</th><td>
+          {{ tr.duplicate_output_count }}
+          {% if tr.output_cue_count > 0 %}
+            {% set dup_pct = (100.0 * tr.duplicate_output_count / tr.output_cue_count) | round(1) %}
+            <span class="{% if dup_pct > 15 %}warn-text{% else %}muted{% endif %} small">
+              ({{ dup_pct }} % — natural duplicates exist ("Oui.", "Non.", "Merci.");
+              &gt; 15 % across long-form cues suggests model collapse)
+            </span>
+          {% endif %}
+        </td></tr>
+      </table>
+    </section>
+  {% endif %}
 {% else %}
   <section>
     <p class="muted">

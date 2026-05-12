@@ -210,6 +210,58 @@ def test_write_sidecar_produces_atomic_json_file(tmp_path):
     assert list(tmp_path.glob("*.tmp")) == []
 
 
+def test_write_cache_sidecar_lives_inside_cache_dir(tmp_path, monkeypatch):
+    """The new sidecar lives under cache_dir/stats/, not next to the .vtt
+    in the user's movie folder. Path is keyed by the VTT cache_key so
+    the explorer can pair them trivially."""
+    from app.config import settings as runtime_settings
+    # Strip any stale instance attribute left over from another test
+    # that used the legacy ``settings.cache_dir = X`` pattern (which
+    # monkeypatch restores AS an instance attr, shadowing _overrides).
+    if "cache_dir" in runtime_settings.__dict__:
+        monkeypatch.delattr(runtime_settings, "cache_dir", raising=False)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    monkeypatch.setattr(
+        runtime_settings, "_overrides",
+        {**runtime_settings._overrides, "cache_dir": str(cache_dir)},
+    )
+    stats = stats_mod.compute_from_vtt(_vtt(
+        ("00:00:00.000", "00:00:02.000", "hi"),
+    ))
+
+    stats_mod.write_cache_sidecar("abc123def4567890", stats)
+
+    expected = cache_dir / "stats" / "abc123def4567890.json"
+    assert expected.exists()
+    # Movie folder is untouched — no .stats.json sitting in tmp_path
+    # at the top level.
+    assert list(tmp_path.glob("*.stats.json")) == []
+
+
+def test_delete_cache_sidecar_removes_file(tmp_path, monkeypatch):
+    from app.config import settings as runtime_settings
+    # Strip any stale instance attribute left over from another test
+    # that used the legacy ``settings.cache_dir = X`` pattern (which
+    # monkeypatch restores AS an instance attr, shadowing _overrides).
+    if "cache_dir" in runtime_settings.__dict__:
+        monkeypatch.delattr(runtime_settings, "cache_dir", raising=False)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    monkeypatch.setattr(
+        runtime_settings, "_overrides",
+        {**runtime_settings._overrides, "cache_dir": str(cache_dir)},
+    )
+    stats_mod.write_cache_sidecar("delme00000", stats_mod.compute_from_vtt(_vtt()))
+    assert (cache_dir / "stats" / "delme00000.json").exists()
+
+    assert stats_mod.delete_cache_sidecar("delme00000") is True
+    assert not (cache_dir / "stats" / "delme00000.json").exists()
+
+    # Idempotent — deleting again returns False, doesn't raise.
+    assert stats_mod.delete_cache_sidecar("delme00000") is False
+
+
 def test_write_sidecar_swallows_oserror(tmp_path, caplog):
     """A failed disk write must NOT raise — a metrics write that
     failed should never take down the surrounding job. Confirm

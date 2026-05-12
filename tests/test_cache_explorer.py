@@ -194,6 +194,24 @@ def test_delete_vtt_returns_false_when_not_found(cache_root):
     assert cache_explorer.delete_vtt_entry("nothing00") is False
 
 
+def test_delete_vtt_also_removes_paired_stats_sidecar(cache_root):
+    """A VTT entry's stats sidecar lives at cache_dir/stats/{key}.json.
+    Deleting the parent must take the sidecar with it — otherwise the
+    user accumulates orphan sidecars that reference deleted entries."""
+    from app import stats as stats_mod
+    _write_vtt_entry(cache_root, "paired00", media_path="/m/x.mkv",
+                     vtt_body="WEBVTT\n")
+    # Lay down a sidecar at the path the writer would produce.
+    sidecar = cache_root / "stats" / "paired00.json"
+    sidecar.parent.mkdir(exist_ok=True)
+    sidecar.write_text('{"cue_count": 0}')
+
+    cache_explorer.delete_vtt_entry("paired00")
+
+    assert not (cache_root / "paired00.json").exists()
+    assert not sidecar.exists()
+
+
 def test_delete_vtt_rejects_path_traversal(cache_root):
     """A handler that forwards a `..` value mustn't be able to climb out
     of cache_dir. _validate_cache_key catches it at the boundary."""

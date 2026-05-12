@@ -20,11 +20,14 @@ Modes:
 Errors are raised as typed subclasses of ProcessError so callers can map them
 to specific HTTP status codes without resorting to string matching.
 """
+import logging
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+_log = logging.getLogger("subtitle_this")
 
 from app import cache as cache_mod
 from app.config import settings
@@ -355,11 +358,27 @@ def process(
         if req.mode in MULTIMODAL_MODES else None
     )
 
+    def _translation_model_id(provider_name: str) -> str | None:
+        """Return the human-readable model identifier for the active
+        translation provider. Surfaced on the stats page so the user
+        sees WHICH model produced the output without having to cross-
+        reference settings — relevant when comparing two runs that
+        differ only in translation backend."""
+        p = (provider_name or "").lower()
+        if p == "nllb":
+            return settings.nllb_model
+        if p == "llm":
+            return settings.translation_llm_model
+        if p == "deepl":
+            return "deepl"   # DeepL doesn't expose a model name
+        return None
+
     try:
         provider = get_provider(req.translation_provider)
     except ValueError as e:
         raise BadRequest(str(e)) from e
 
+    translate_started = time.monotonic()
     try:
         translated = provider.translate(
             transcription.cues,
@@ -371,7 +390,26 @@ def process(
         )
     except TranslationError as e:
         raise TranslationFailed(str(e)) from e
+    translate_took = time.monotonic() - translate_started
     progress(98, "writing")
+
+    # ── Translation metrics ──────────────────────────────────────────────
+    # Computed from outside the provider so the same code works for
+    # NLLB, DeepL, and the LLM backends. Adds about a millisecond on a
+    # 2 h film — pure dict/counter work.
+    from app import pipeline_metrics as pm_mod
+    translation_metrics = pm_mod.compute_translation_metrics(
+        provider=req.translation_provider,
+        model=_translation_model_id(req.translation_provider),
+        input_cues=transcription.cues,
+        output_cues=translated,
+        took_seconds=translate_took,
+    )
+    # Merge into the transcription's pipeline_metrics so everything
+    # flows through ONE struct down to the cache payload + .stats.json.
+    if transcription.pipeline_metrics is None:
+        transcription.pipeline_metrics = pm_mod.PipelineMetrics()
+    transcription.pipeline_metrics.translation = translation_metrics
 
     vtt = to_webvtt(
         translated,
@@ -416,6 +454,33 @@ def process(
     # cancel always recomputes from scratch — there is no "fucked-up cached
     # half-result" path. test_cancel_does_not_leave_cache_entry locks this in.
     cache_mod.store_two_level(media, payload, **key_kwargs)
+
+    # Write the .stats.json sidecar INSIDE the cache (cache_dir/stats/),
+    # NOT next to the .vtt — the .vtt sits in the user's movie folder
+    # and they don't want metrics polluting it. Two files written so
+    # both the quick-fp and content-fp lookups can find a paired
+    # sidecar; the payloads are identical, taking ~few KB total.
+    try:
+        from app import stats as stats_mod
+        stats_record = stats_mod.compute_from_vtt(
+            vtt,
+            media_path=str(media),
+            mode=req.mode,
+            detected_source_language=transcription.detected_language,
+            took_seconds=time.monotonic() - started,
+            pipeline_metrics=pipeline_metrics_dict,
+        )
+        content_fp = cache_mod.content_fingerprint(media)
+        quick_fp = cache_mod.quick_fingerprint(media)
+        quick_key_for_stats = cache_mod.cache_key(quick_fp, **key_kwargs)
+        content_key_for_stats = cache_mod.cache_key(content_fp, **key_kwargs)
+        stats_mod.write_cache_sidecar(quick_key_for_stats, stats_record)
+        if quick_key_for_stats != content_key_for_stats:
+            stats_mod.write_cache_sidecar(content_key_for_stats, stats_record)
+    except Exception:
+        # Stats are observability, not a correctness requirement —
+        # never let a metrics write failure abort the job.
+        _log.warning("stats sidecar write failed", exc_info=True)
 
     return ProcessResult(
         vtt=vtt,

@@ -168,21 +168,10 @@ def submit_item_job(
         job.output_path = str(out)
         job.cue_count = result.cue_count
 
-        # Write the {vtt_path}.stats.json sidecar so the run's quality /
-        # coverage numbers travel with the .vtt itself — copy the .vtt
-        # off the NAS and the metrics come along. Best-effort: any IO
-        # failure is logged and swallowed inside write_sidecar so a
-        # broken metrics write can't hold the job hostage.
-        from app import stats as stats_mod
-        stats_record = stats_mod.compute_from_vtt(
-            result.vtt,
-            media_path=str(media),
-            mode=result.mode,
-            detected_source_language=result.detected_source_language,
-            took_seconds=result.took_seconds,
-            pipeline_metrics=result.pipeline_metrics,
-        )
-        stats_mod.write_sidecar(out, stats_record)
+        # The .stats.json sidecar is written by processor.process()
+        # into cache_dir/stats/, not here — keeping it inside the
+        # cache avoids polluting the user's movie folder with
+        # metrics files alongside the .vtt itself.
 
         # Language tag write-back: if the source track had no language tag and
         # Whisper detected one, persist that detection to the file's audio

@@ -91,6 +91,75 @@ class WhisperMetrics:
 
 
 @dataclass
+class TranslationMetrics:
+    """Captured after ``provider.translate(...)`` returns. We measure
+    from OUTSIDE the provider — counts + chars on input vs output cue
+    lists, plus the wall-clock took — so the same metrics work for
+    every provider (NLLB / DeepL / LLM) without each one needing its
+    own internal instrumentation.
+
+    Two pathologies show up cleanly here:
+
+    - **Empty outputs**: many cues translated to the empty string.
+      Common with int8-quantized NLLB on certain seq2seq configs
+      (the 0.7.1 candidate we ruled out via timestamp-collapse
+      diagnosis). Spike here → quantization is degenerate; turn
+      ``nllb_load_in_8bit`` off.
+    - **Duplicate outputs**: many cues translate to the same string.
+      Classic model-collapse signature (temperature too high, or
+      the model is stuck in a low-entropy basin). Less common but
+      worth a flag.
+    """
+    provider: str | None = None
+    model: str | None = None
+    took_seconds: float = 0.0
+    input_cue_count: int = 0
+    output_cue_count: int = 0
+    input_total_chars: int = 0
+    output_total_chars: int = 0
+    char_ratio: float = 0.0           # output_chars / input_chars
+    empty_output_count: int = 0
+    duplicate_output_count: int = 0   # cues whose text matches another's
+
+
+def compute_translation_metrics(
+    *,
+    provider: str | None,
+    model: str | None,
+    input_cues,
+    output_cues,
+    took_seconds: float,
+) -> TranslationMetrics:
+    """Pure function — takes input and output cue lists from a finished
+    translation call and reports the diagnostic counts. Aggregator-free
+    because translation runs once per job and we don't need a streaming
+    interface (unlike VAD/packing which fire many times during STT)."""
+    in_chars = sum(len(c.text) for c in input_cues)
+    out_texts = [c.text for c in output_cues]
+    out_chars = sum(len(t) for t in out_texts)
+    empty = sum(1 for t in out_texts if not t.strip())
+    # Duplicate detection: a text counts as duplicated if it appears
+    # MORE THAN ONCE in the output. We count the duplicated instances
+    # (not just unique duplicates) so a "model emits 'Yes.' 800 times"
+    # surfaces as 800, not 1.
+    from collections import Counter
+    counts = Counter(t for t in out_texts if t.strip())
+    dup = sum(n for n in counts.values() if n > 1)
+    return TranslationMetrics(
+        provider=provider,
+        model=model,
+        took_seconds=round(took_seconds, 2),
+        input_cue_count=len(input_cues),
+        output_cue_count=len(output_cues),
+        input_total_chars=in_chars,
+        output_total_chars=out_chars,
+        char_ratio=round(out_chars / in_chars, 3) if in_chars > 0 else 0.0,
+        empty_output_count=empty,
+        duplicate_output_count=dup,
+    )
+
+
+@dataclass
 class PipelineMetrics:
     """The full per-run telemetry record. Each sub-metric is optional
     so consumers downstream (stats sidecar, transcript cache replay)
@@ -99,6 +168,7 @@ class PipelineMetrics:
     vad: VadMetrics | None = None
     packing: PackingMetrics | None = None
     whisper: WhisperMetrics | None = None
+    translation: TranslationMetrics | None = None
 
 
 # ── Aggregators (mutable; written to during a run, then finalized) ────────
