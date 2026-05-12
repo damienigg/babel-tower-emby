@@ -360,15 +360,36 @@ _FIELD_META: list[dict[str, Any]] = [
          "'[openvino] whisper:…  selected=GPU' confirms what was actually picked."
      )},
     {"key": "stt_region_packing", "section": "Speech-to-Text",
-     "label": "Region packing (OpenVINO)", "type": "checkbox",
+     "label": "Region packing (OpenVINO) — fast mode", "type": "checkbox",
      "show_if": {"field": "whisper_backend", "equals": "openvino"},
-     "help": "Pack multiple short speech regions into one 30 s Whisper "
-             "window separated by 0.5 s silence pads. Cuts iGPU compute "
-             "1.5-3× on dialog-heavy films but can drop legitimate cues "
-             "when Whisper's predicted timestamp drifts into a pad zone. "
-             "Turn OFF if you're seeing missing dialogue — each speech "
-             "region then gets its own window (slower but no pad-drop "
-             "risk). Ignored when whisper_backend = cpu."},
+     "help": "ON (default, fast): groups many short speech bits into a single "
+             "Whisper transcription pass. Drastically faster — a 2 h film "
+             "takes ~10 minutes on an Intel iGPU. The trade-off is that "
+             "Whisper can occasionally lose track of timing when too many "
+             "bits are bundled, which used to lose dialog. Mitigated since "
+             "0.7.11 by the density cap (see field below) and snap recovery; "
+             "in practice ON now produces near-OFF accuracy on most films.\n"
+             "\n"
+             "OFF (slow, max accuracy): each speech segment gets its own "
+             "Whisper pass. Same 2 h film now takes ~1.5-2 hours of "
+             "transcription on the same iGPU — roughly 10× slower. Turn OFF "
+             "only when ON is still missing visible dialog after tuning the "
+             "density cap.\n"
+             "\n"
+             "Ignored on the CPU/faster-whisper backend (it has its own "
+             "longform batching)."},
+    {"key": "stt_max_regions_per_window", "section": "Speech-to-Text",
+     "label": "Region packing — max regions per pass", "type": "number",
+     "show_if": {"field": "whisper_backend", "equals": "openvino"},
+     "help": "Hard cap on how many short speech bits get bundled into one "
+             "Whisper pass. Lower = more accurate timing (less risk of "
+             "losing dialog), slower transcription. Higher = faster, more "
+             "risk.\n"
+             "\n"
+             "Reference points: 4 (default, recommended), 8 (faster, "
+             "still safe with snap recovery), 0 (no cap — legacy "
+             "pre-0.7.11 behavior, drops ~40 % of dialog on dense films). "
+             "Most users should leave this alone."},
 
     # ── Translation (provider chooser + provider-specific params) ─────────────
     # The provider chooser lives at the top of this section so it gates the

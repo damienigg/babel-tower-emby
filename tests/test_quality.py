@@ -65,7 +65,7 @@ def test_very_short_pct_below_15_skips_penalty():
 def test_pad_drop_above_20_pct_is_critical():
     pm = {"packing": {"cue_drop_pad_zone_count": 300, "cue_keep_count": 700}}
     s = compute_quality_score(_Stats(pipeline_metrics=pm))
-    f = next(f for f in s.factors if f.name == "Region-packing pad-drops")
+    f = next(f for f in s.factors if f.name == "Region-packing unrecoverable drops")
     assert f.severity == "critical"
     assert s.score == 80   # 100 - 20
 
@@ -73,7 +73,7 @@ def test_pad_drop_above_20_pct_is_critical():
 def test_pad_drop_zero_skips_penalty():
     pm = {"packing": {"cue_drop_pad_zone_count": 0, "cue_keep_count": 900}}
     s = compute_quality_score(_Stats(pipeline_metrics=pm))
-    assert not any(f.name == "Region-packing pad-drops" for f in s.factors)
+    assert not any(f.name == "Region-packing unrecoverable drops" for f in s.factors)
 
 
 # ── (3) VAD under-detection ───────────────────────────────────────────────

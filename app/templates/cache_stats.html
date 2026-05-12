@@ -250,18 +250,23 @@
         <tr><th>Packed (&gt; 1 region)</th><td>{{ pk.windows_packed }}</td></tr>
         <tr><th>Single-region</th><td>{{ pk.windows_single_region }}</td></tr>
         <tr><th>Avg regions / window</th><td>{{ pk.avg_regions_per_window }}</td></tr>
-        <tr><th>Cues kept</th><td>{{ pk.cue_keep_count }}</td></tr>
-        <tr><th>Cues dropped — pad zone</th><td>
+        <tr><th>Cues kept (in-region)</th><td>{{ pk.cue_keep_count }}</td></tr>
+        <tr><th>Cues recovered (snap)</th><td>
+          {{ pk.cue_snap_pad_zone_count or 0 }}
+          <span class="muted small">
+            (cues whose timestamp fell in a pad zone — rescued by snapping
+            to the nearest region's start, ≤ 0.5 s time shift. Pre-0.7.11
+            these were silently dropped; on Inception's first pass that
+            was 733 lost cues.)
+          </span>
+        </td></tr>
+        <tr><th>Cues dropped — degenerate</th><td>
           {{ pk.cue_drop_pad_zone_count }}
-          {% set drop_total = pk.cue_keep_count + pk.cue_drop_pad_zone_count %}
-          {% if drop_total > 0 %}
-            {% set drop_pct = (100.0 * pk.cue_drop_pad_zone_count / drop_total) | round(1) %}
-            <span class="{% if drop_pct > 10 %}warn-text{% else %}muted{% endif %} small">
-              ({{ drop_pct }} % of total — these are cues whose Whisper-predicted
-              timestamp fell in a silence pad between packed regions and got
-              silently dropped by remap_cue_to_original)
-            </span>
-          {% endif %}
+          <span class="muted small">
+            (cues whose snap target would have produced an end ≤ start —
+            usually genuine pad-zone hallucinations rather than mis-timed
+            real content)
+          </span>
         </td></tr>
       </table>
       <p class="muted small">

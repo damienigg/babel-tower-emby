@@ -388,6 +388,7 @@ def transcribe(
             if packing_enabled:
                 windows = plan_packed_windows(
                     processable_regions, _CHUNK_SAMPLES,
+                    max_regions_per_window=int(settings.stt_max_regions_per_window or 0),
                 )
             else:
                 # Backward-compatible single-region-per-window mode (the
@@ -447,12 +448,19 @@ def transcribe(
                             win_start, win_end, win.region_map, _SAMPLE_RATE,
                         )
                         if mapped is None:
-                            # Cue fell in a pad zone (silence between packed
-                            # regions) — Whisper hallucinated, drop it.
+                            # Genuinely unmappable — empty region_map or
+                            # a degenerate cue. Truly drop it.
                             packing_agg.record_cue_drop_pad_zone()
                             continue
-                        packing_agg.record_cue_keep()
-                        orig_start, orig_end = mapped
+                        orig_start, orig_end, was_snapped = mapped
+                        if was_snapped:
+                            # Pad-zone cue rescued via snap. The content
+                            # is real (Whisper just mis-timed it by ≤ 0.5 s);
+                            # we keep the cue but tag the recovery so the
+                            # stats page can surface how many were affected.
+                            packing_agg.record_cue_snap_pad_zone()
+                        else:
+                            packing_agg.record_cue_keep()
                         cues.append(Cue(
                             id=next_id,
                             start=orig_start + seg_offset_seconds,

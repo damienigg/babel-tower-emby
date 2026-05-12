@@ -74,6 +74,7 @@ def plan_packed_windows(
     speech_regions: list[tuple[int, int]],
     chunk_samples: int,
     pad_samples: int = 8000,    # 0.5 s at 16 kHz — gives Whisper a clear segment boundary
+    max_regions_per_window: int = 0,   # 0 = unlimited (pre-0.7.11 behavior)
 ) -> list[Window]:
     """Walk speech_regions in order and bin them into 30 s windows.
 
@@ -87,6 +88,15 @@ def plan_packed_windows(
       into chunk_samples slices the original way), and the current
       packing accumulator is flushed first so its packed window doesn't
       precede the long-region slices in input order.
+
+    `max_regions_per_window`: hard cap on packing density. Set to 0
+    (the historical default) for no cap. With a film-mix audio source,
+    Whisper-turbo's timestamp accuracy degrades as the number of
+    discontinuities in the window grows — at the Inception measurement
+    (12.4 regions/window average) Whisper drifted enough that 44 % of
+    its cues landed in pad zones. A cap of 4 keeps pad overhead at
+    ~5 % of the window's audio time instead of 20 %, while still
+    cutting iGPU compute substantially vs no-packing-at-all.
 
     Pure function — no audio data or torch. Unit-testable without native deps.
     """
@@ -137,7 +147,15 @@ def plan_packed_windows(
         # Account for the pad we'd insert before this region (skipped
         # when the window is empty).
         needed = r_length + (pad_samples if cur_slices else 0)
-        if cur_used + needed > pack_capacity:
+        # Two flush conditions: (a) the region doesn't fit in remaining
+        # window capacity, (b) the window has already reached the
+        # per-window cap (when set). Either way: close the window and
+        # start a fresh one with no leading pad.
+        cap_reached = (
+            max_regions_per_window > 0
+            and len(cur_slices) >= max_regions_per_window
+        )
+        if cur_used + needed > pack_capacity or cap_reached:
             _flush()
             needed = r_length    # no leading pad in a fresh window
 
@@ -159,18 +177,40 @@ def remap_cue_to_original(
     cue_end_window_s: float,
     region_map: list[RegionEntry],
     sample_rate: int,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, bool] | None:
     """Given a cue's window-relative (start, end) seconds, find which
-    packed region it belongs to and return its original-audio (start, end).
+    packed region it belongs to and return its original-audio
+    (start, end, was_snapped).
 
-    Returns None when the cue's start falls inside a pad zone — those
-    cues are Whisper hallucinations on the silence between packed
-    regions and should be dropped (they don't correspond to real audio).
+    The third element distinguishes two cases the caller wants to count
+    separately:
+
+    - ``was_snapped=False``: the cue's start fell cleanly inside a real
+      region — no positional adjustment needed.
+    - ``was_snapped=True``: the cue's start fell in a silence pad zone
+      between packed regions. Pre-0.7.11 we returned None and the
+      caller silently dropped the cue, which is how Inception's 733
+      legitimate cues vanished (Whisper's autoregressive timestamp
+      prediction drifts 100-300 ms on densely-packed windows; cues
+      with valid TEXT content but slightly off TIMESTAMPS got nuked).
+      We now snap the cue's start to the closest region's start
+      boundary, preserving the content with at most ~0.5 s of time
+      shift (the pad width), which is well below the perceptual
+      audio-subtitle sync threshold (~1 s).
+
+    Returns None only when ``region_map`` is empty, or when the snap
+    would produce a degenerate cue (end ≤ start in original-audio
+    time — e.g. a 0.05 s cue stamped entirely inside a pad whose
+    nearest region boundary is on the wrong side).
     """
+    if not region_map:
+        return None
+
+    start_sample = cue_start_window_s * sample_rate
+
     # Binary search over region_map would be marginally faster, but each
     # window has <= ~20 regions in practice — linear scan is simpler and
     # the per-cue cost is dwarfed by the LLM/decoder calls anyway.
-    start_sample = cue_start_window_s * sample_rate
     for entry in region_map:
         region_end = entry.window_offset_samples + entry.length_samples
         if entry.window_offset_samples <= start_sample < region_end:
@@ -184,5 +224,50 @@ def remap_cue_to_original(
             return (
                 cue_start_window_s + shift_s,
                 clamped_end_window_s + shift_s,
+                False,                 # cleanly in-region
             )
-    return None   # cue starts in a pad zone — drop
+
+    # ── Pad-zone snap recovery (0.7.11+) ────────────────────────────────
+    # Pick the region whose nearest boundary is closest to the cue start,
+    # then snap the cue's start onto that region's START. Always-START is
+    # a deliberate simplification — using the region's END for "snap
+    # backwards" cases would assign the cue to the trailing edge of a
+    # region's audio context, which usually corresponds to a word that
+    # was already captured by the previous cue. Snapping to the next
+    # region's start keeps the cue ordering monotonic and assigns it to
+    # whichever region's audio Whisper was actually decoding.
+    def _distance_to_region(entry: "RegionEntry") -> float:
+        region_end = entry.window_offset_samples + entry.length_samples
+        return min(
+            abs(start_sample - entry.window_offset_samples),
+            abs(start_sample - region_end),
+        )
+
+    closest = min(region_map, key=_distance_to_region)
+    snapped_start_window_s = closest.window_offset_samples / sample_rate
+    shift_s = (
+        closest.original_start_samples - closest.window_offset_samples
+    ) / sample_rate
+    closest_end_s = (
+        closest.window_offset_samples + closest.length_samples
+    ) / sample_rate
+
+    # Preserve the cue's original duration where the region has room.
+    # If the original end timestamp was further out than the region's
+    # end, clamp to the region's end (same logic as the in-region path).
+    original_duration_s = max(0.0, cue_end_window_s - cue_start_window_s)
+    if original_duration_s == 0:
+        # Degenerate input — drop rather than fabricate.
+        return None
+    snapped_end_window_s = min(
+        snapped_start_window_s + original_duration_s,
+        closest_end_s,
+    )
+    if snapped_end_window_s <= snapped_start_window_s:
+        return None
+
+    return (
+        snapped_start_window_s + shift_s,
+        snapped_end_window_s + shift_s,
+        True,                          # snapped from pad zone
+    )

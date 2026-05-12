@@ -72,13 +72,22 @@ class PackingMetrics:
     """Captured during the STT loop in stt_openvino.py. Single-region
     windows can't suffer pad-drop (no pads inside the window), so the
     pad-drop count specifically incriminates region-packing — turning
-    packing off and re-running should drop it to zero."""
+    packing off and re-running should drop it to zero.
+
+    0.7.11 introduced snap recovery: when a cue's timestamp lands in
+    a silence pad, we now snap it to the closest region instead of
+    silently dropping the cue. ``cue_snap_pad_zone_count`` tracks how
+    many cues were rescued this way; ``cue_drop_pad_zone_count`` now
+    only counts cues whose snap target was degenerate (end ≤ start
+    after snap — usually a hallucination on a 50-ms pad slice).
+    """
     enabled: bool = True
     windows_total: int = 0
     windows_packed: int = 0          # >1 region per window
     windows_single_region: int = 0   # =1 region (no pad-drop risk)
     avg_regions_per_window: float = 0.0
     cue_drop_pad_zone_count: int = 0
+    cue_snap_pad_zone_count: int = 0    # rescued, ≤ 0.5 s time-shifted
     cue_keep_count: int = 0
 
 
@@ -241,6 +250,7 @@ class PackingAggregator:
         self.windows_single_region = 0
         self._regions_per_window_sum = 0
         self.cue_drop_pad_zone_count = 0
+        self.cue_snap_pad_zone_count = 0
         self.cue_keep_count = 0
 
     def record_window(self, n_regions: int) -> None:
@@ -253,6 +263,12 @@ class PackingAggregator:
 
     def record_cue_drop_pad_zone(self) -> None:
         self.cue_drop_pad_zone_count += 1
+
+    def record_cue_snap_pad_zone(self) -> None:
+        """Called when remap_cue_to_original recovered a cue via snap
+        instead of dropping it. The cue's content survives; only its
+        timing is off by ≤ 0.5 s."""
+        self.cue_snap_pad_zone_count += 1
 
     def record_cue_keep(self) -> None:
         self.cue_keep_count += 1
@@ -269,6 +285,7 @@ class PackingAggregator:
             windows_single_region=self.windows_single_region,
             avg_regions_per_window=avg,
             cue_drop_pad_zone_count=self.cue_drop_pad_zone_count,
+            cue_snap_pad_zone_count=self.cue_snap_pad_zone_count,
             cue_keep_count=self.cue_keep_count,
         )
 

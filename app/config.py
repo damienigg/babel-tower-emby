@@ -122,6 +122,15 @@ class _EnvSettings(BaseSettings):
     # region boundaries on a specific film. OpenVINO-only (the CPU/
     # faster-whisper backend handles its own longform batching).
     stt_region_packing: bool = True
+    # Hard cap on how many speech regions get packed into one 30 s
+    # Whisper window. Default 4 — keeps the silence-pad overhead
+    # at ~5 % of the window's audio, which Whisper-turbo's
+    # autoregressive timestamp prediction handles cleanly. With
+    # no cap (the pre-0.7.11 behavior, =0) the planner could pack
+    # 12+ regions per window and Whisper drifted enough to land
+    # nearly half its cues in silence pads — see the Inception
+    # post-mortem. Ignored when stt_region_packing is OFF.
+    stt_max_regions_per_window: int = Field(4, ge=0, le=20)
     # Forward overlap (seconds) added to each STT audio-segment read so
     # speech regions straddling a segment boundary get processed in full
     # within one segment instead of being split. 30 s is one decoder

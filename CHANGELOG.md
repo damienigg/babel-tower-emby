@@ -7,6 +7,64 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.11] — 2026-05-12
+
+The Inception fix: pad-zone snap recovery + region-packing density
+cap. Together these turn the historical "44 % of cues silently
+dropped" pathology into "~0 % dropped, ~5-15 % timing-shifted by
+&lt; 0.5 s (invisible)".
+
+### Changed
+
+- `remap_cue_to_original` returns a 3-tuple `(start, end, was_snapped)`
+  instead of `(start, end) | None`. **When a cue's timestamp falls in
+  a silence pad** between packed regions, the function now snaps it
+  to the closest region's start instead of returning None. The cue's
+  TEXT is preserved with a time shift bounded by the pad width (0.5 s),
+  which is well below the audio-subtitle sync perceptual threshold
+  (~1 s). None is now reserved for the genuinely unmappable case
+  (empty region_map, or a zero-duration cue).
+- `plan_packed_windows` takes a new `max_regions_per_window` parameter.
+  Default 4 (the Settings UI default); 0 = legacy unlimited.
+- Quality-score factor "Region-packing pad-drops" renamed to
+  "Region-packing unrecoverable drops" — the old name conflated the
+  recoverable and unrecoverable cases that this release separates.
+  A new soft factor "Heavy snap-recovery usage" (info-only, ≤ 5
+  points) surfaces when &gt; 15 % of cues required snap recovery —
+  the run produced usable subtitles but the density cap could be
+  tightened for cleaner timing next time.
+
+### Added
+
+- New setting `stt_max_regions_per_window` (default 4, range 0-20).
+  Hard cap on how many short speech regions get bundled into one
+  30 s Whisper pass. Lower = better timestamp accuracy from Whisper-
+  turbo, slower transcription. On the Inception baseline (12.4
+  regions/window avg) lowering to 4 cuts pad overhead from 20 %
+  to ~5 % of each window's audio time.
+- New `PackingMetrics.cue_snap_pad_zone_count` — cues rescued via
+  snap, shown on the stats page as "Cues recovered (snap)" with
+  inline explanation. The old "Cues dropped — pad zone" row is
+  renamed "Cues dropped — degenerate" since with snap recovery
+  in place, the residual drops are mostly real hallucinations on
+  pad slices.
+- Settings page rewrites the `stt_region_packing` help text in
+  plain language with concrete runtime numbers: ON = "~10 min on
+  iGPU for a 2 h film", OFF = "~1.5-2 hours for the same film",
+  with a note that 0.7.11's density cap + snap recovery make ON
+  the right default for almost everyone.
+
+### Tests
+
+- 4 new tests in `tests/test_packing.py`: snap to nearest region's
+  start (two directions — closer to previous-end vs closer to
+  next-start), empty-region-map fallback, zero-duration-in-pad
+  drop, and the density cap (verified at cap=3 producing 4
+  windows for 12 input regions, and cap=0 reproducing unlimited
+  legacy behavior).
+- All existing tests using the 2-tuple shape updated to unpack
+  the new 3-tuple with `was_snapped`.
+
 ## [0.7.10] — 2026-05-12
 
 UI polish out of the feedback loop.

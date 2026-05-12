@@ -133,42 +133,80 @@ def compute_quality_score(stats: "Any") -> QualityScore:
         ))
         score -= 8
 
-    # ── (2) Region-packing pad-drops ──────────────────────────────────
+    # ── (2) Region-packing pad-zone activity ──────────────────────────
+    # Two related signals here, scored separately:
+    #
+    # - cue_drop_pad_zone_count: cues that were *unrecoverable* (snap
+    #   target was degenerate, e.g. end ≤ start in original audio).
+    #   These represent true content loss — penalize at the old rates.
+    # - cue_snap_pad_zone_count (0.7.11+): cues whose timestamp fell in
+    #   a pad but were recovered via snap. The CONTENT is preserved,
+    #   only the timing is shifted by ≤ 0.5 s. We surface a soft
+    #   info-only penalty when the rate is high so the user sees that
+    #   the pipeline is leaning hard on snap (not catastrophic, but
+    #   tuning the density cap lower would reduce it).
     packing = pm.get("packing") if isinstance(pm.get("packing"), dict) else None
     if packing:
         drop = int(packing.get("cue_drop_pad_zone_count") or 0)
+        snap = int(packing.get("cue_snap_pad_zone_count") or 0)
         keep = int(packing.get("cue_keep_count") or 0)
-        total = drop + keep
+        total = drop + snap + keep
         if total > 0:
             drop_pct = 100.0 * drop / total
             if drop_pct > 20:
                 factors.append(QualityFactor(
-                    name="Region-packing pad-drops",
+                    name="Region-packing unrecoverable drops",
                     severity="critical",
                     penalty=20,
-                    detail=f"{drop_pct:.1f} % of decoded cues fell in silence "
-                           "pads and were silently dropped. Turn off "
-                           "stt_region_packing for a definitive fix.",
+                    detail=f"{drop_pct:.1f} % of decoded cues couldn't be "
+                           "snap-recovered (degenerate after snap). Try "
+                           "lowering stt_max_regions_per_window, or turn "
+                           "off stt_region_packing for the strictest fix.",
                 ))
                 score -= 20
             elif drop_pct > 10:
                 factors.append(QualityFactor(
-                    name="Region-packing pad-drops",
+                    name="Region-packing unrecoverable drops",
                     severity="warn",
                     penalty=10,
-                    detail=f"{drop_pct:.1f} % of decoded cues dropped to "
-                           "pad zones (threshold: > 10 %).",
+                    detail=f"{drop_pct:.1f} % of cues couldn't be recovered.",
                 ))
                 score -= 10
             elif drop_pct > 5:
                 factors.append(QualityFactor(
-                    name="Region-packing pad-drops",
+                    name="Region-packing unrecoverable drops",
                     severity="info",
                     penalty=5,
-                    detail=f"{drop_pct:.1f} % of cues dropped to pad zones — "
-                           "moderate, mostly tolerable.",
+                    detail=f"{drop_pct:.1f} % unrecoverable — moderate.",
                 ))
                 score -= 5
+
+            # Snap rate: informational. High = pipeline is leaning on the
+            # safety net heavily; the cues survived but timing might be
+            # off by up to 0.5 s. Penalize lightly so the score reflects
+            # the residual imperfection without dragging the run into
+            # a bad grade for an issue the snap already mostly fixed.
+            snap_pct = 100.0 * snap / total
+            if snap_pct > 30:
+                factors.append(QualityFactor(
+                    name="Heavy snap-recovery usage",
+                    severity="info",
+                    penalty=5,
+                    detail=f"{snap_pct:.1f} % of cues needed snap recovery "
+                           "(timing shifted ≤ 0.5 s). Content preserved "
+                           "but consider lowering stt_max_regions_per_window "
+                           "for tighter timestamps on the next run.",
+                ))
+                score -= 5
+            elif snap_pct > 15:
+                factors.append(QualityFactor(
+                    name="Heavy snap-recovery usage",
+                    severity="info",
+                    penalty=2,
+                    detail=f"{snap_pct:.1f} % of cues snap-recovered "
+                           "(timing shifted ≤ 0.5 s).",
+                ))
+                score -= 2
 
     # ── (3) VAD under-detection (speech ratio too low) ────────────────
     vad = pm.get("vad") if isinstance(pm.get("vad"), dict) else None
