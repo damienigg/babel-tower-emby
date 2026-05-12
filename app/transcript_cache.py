@@ -71,10 +71,21 @@ def _key(
 ) -> str:
     """Stable composite key. Order matters only for readability — these
     fields are concatenated, not hashed, so changing order would break
-    existing cache files. Don't reorder unless you bump a cache version
-    prefix (and accept the one-time miss across upgrade)."""
+    existing cache files. Don't reorder unless you bump the schema
+    version prefix (and accept the one-time miss across upgrade).
+
+    Schema versions:
+    - v2 (current): cues carry source-audio-absolute timestamps.
+    - v1 (pre-0.7.2): cues from multi-segment runs had timestamps stamped
+      segment-relative because the region-packing remap dropped the
+      additive seg_offset_seconds. Files with v1-shaped timestamps look
+      structurally valid but collapse every cue into the first 600 s of
+      the timeline on long media — invalidating the prefix forces a
+      re-transcribe so users don't silently inherit broken caches.
+    """
     return (
-        f"{content_fp}"
+        f"v2"
+        f"_{content_fp}"
         f"_{whisper_backend}"
         f"_{whisper_model.replace('/', '-')}"
         f"_vad{int(bool(vad_enabled))}"

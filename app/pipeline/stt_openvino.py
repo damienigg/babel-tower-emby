@@ -395,6 +395,15 @@ def transcribe(
                     )
                     # Parse with offset=0 to get window-relative cues; we
                     # remap each cue through the window's region_map below.
+                    # remap_cue_to_original returns segment-relative seconds
+                    # (the region_map's `original_start_samples` is in the
+                    # segment's frame because VAD ran over seg_audio). We
+                    # add seg_offset_seconds to lift them into source-audio
+                    # coordinates — without this, every segment's cues end
+                    # up stamped 0-segment_seconds and collapse onto the
+                    # first segment's window of the timeline (regression
+                    # introduced when the packing-based remap replaced the
+                    # old additive offset path).
                     for win_start, win_end, text in _parse_segments(decoded, 0.0):
                         mapped = remap_cue_to_original(
                             win_start, win_end, win.region_map, _SAMPLE_RATE,
@@ -406,8 +415,8 @@ def transcribe(
                         orig_start, orig_end = mapped
                         cues.append(Cue(
                             id=next_id,
-                            start=orig_start,
-                            end=orig_end,
+                            start=orig_start + seg_offset_seconds,
+                            end=orig_end + seg_offset_seconds,
                             text=text,
                         ))
                         next_id += 1

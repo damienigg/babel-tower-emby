@@ -7,6 +7,45 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-05-12
+
+Fixes a long-standing STT timestamp bug that was masked by the
+80 % OOM crashes until 0.7.1 finally let runs reach the `.vtt`
+writer. On any media longer than the audio segment size (default
+600 s ≈ 10 min), every cue from segments 2..N was stamped with
+segment-relative timestamps instead of source-audio-absolute,
+causing **all** subtitles to collapse into the opening 10 min of
+the timeline — text was correct, timestamps were wrong.
+
+### Fixed
+
+- `app/pipeline/stt_openvino.py`: the region-packing remap returns
+  segment-relative cue timestamps; the loop now lifts them by
+  `seg_offset_seconds` (= `file_pos / sample_rate`) before
+  appending to the cue list. The additive offset was present in
+  the pre-0.6.0 chunked-mode path but got dropped during the
+  region-packing refactor; this restores it. The CPU/faster-whisper
+  backend was unaffected (faster-whisper yields globally-correct
+  segment timestamps from its own iterator).
+
+### Changed
+
+- `transcript_cache` key schema bumped from v1 to v2. Any cached
+  transcription stored by 0.7.0–0.7.1 has the broken
+  segment-relative timestamps baked in; bumping the key prefix
+  forces a one-time miss so users don't silently inherit a
+  poisoned cache. Old `.json` files are left on disk and can be
+  cleaned with `rm -rf cache_dir/transcripts/*` if desired.
+
+### Tests
+
+- New `tests/test_stt_segment_offset.py` exercises the full
+  multi-segment `transcribe()` loop with mocked Whisper/VAD/
+  soundfile. Asserts that a cue produced inside segment 1
+  (`file_pos = segment_seconds`) lands at an absolute time
+  ≥ `segment_seconds`, not at 0-segment_seconds. Verified the
+  test fails on the pre-fix code with the expected diagnostic.
+
 ## [0.7.1] — 2026-05-11
 
 NLLB-1.3B now fits comfortably under a 12 GB cgroup. Two changes
