@@ -7,6 +7,45 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-05-12
+
+New **Cache Explorer** page so re-runs no longer require SSH-ing
+into the host to find the right hashed cache filename.
+
+### Added
+
+- `GET /cache` page (new nav tab "Cache") with two sections:
+  **VTT cache** (top-level `cache_dir/*.json`) and
+  **Transcript cache** (`cache_dir/transcripts/*.json`). Each row
+  shows the film name, language pair, mode, provider, Whisper
+  model, cue count, size, and a relative "modified" timestamp.
+  Per-row delete buttons and per-section "Clear all" buttons. The
+  page excludes model weights (`openvino-models/`, `nllb-models/`,
+  `hf/`) and runtime state (`settings.json`, `jobs.json`) — those
+  aren't subtitle artefacts and shouldn't be one-click-deletable.
+- New module `app/cache_explorer.py` with list / delete helpers,
+  parsing the .vtt `NOTE` header line to surface lang / mode /
+  provider / whisper for legacy entries that pre-date the
+  payload-side `media_path` field.
+- `media_path` is now stored in the VTT cache payload at write
+  time so future entries render the film name directly. Pre-0.7.4
+  entries fall back to NOTE-header parsing and a first-cue preview
+  for visual identification.
+- 6 new API endpoints under `/api/cache/...` (list / delete /
+  clear-all for each of the two buckets). Defensive against
+  path-traversal at the boundary; refuses to touch
+  `settings.json` / `jobs.json` even with a syntactically valid
+  key.
+
+### Tests
+
+- 14 unit tests in `tests/test_cache_explorer.py` covering listing
+  (media-path-rich + legacy + corrupt + sorting), deleting
+  (existing, missing, path-traversal, runtime-file refusal), and
+  clear-all (both buckets).
+- 3 smoke tests in `tests/test_smoke_api.py` for page render +
+  API listing + path-traversal HTTP 400.
+
 ## [0.7.3] — 2026-05-12
 
 Two operator-facing additions that came out of the Inception

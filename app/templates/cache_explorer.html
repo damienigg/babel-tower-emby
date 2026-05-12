@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section>
+  <h1>Cache</h1>
+  <p>
+    Entries that served to generate a subtitle. Delete a row to force a
+    re-run of that step on the next job. Model weights (Whisper / NLLB
+    OpenVINO IR under <code>openvino-models/</code> and
+    <code>nllb-models/</code>) and the HuggingFace download cache live
+    under <code>/cache</code> too but are not listed here — they're
+    multi-GB and rebuilding them costs a long re-download, so the
+    explorer deliberately keeps them out of one-click range.
+  </p>
+</section>
+
+{# ── VTT (result) cache ─────────────────────────────────────────── #}
+<section>
+  <div class="jobs-header">
+    <h2>VTT cache <span class="muted">({{ vtt_entries|length }})</span></h2>
+    {% if vtt_entries %}
+      <button type="button" class="secondary outline clear-all-vtt-btn"
+              data-count="{{ vtt_entries|length }}"
+              title="Delete every entry in the VTT cache">
+        Clear all
+      </button>
+    {% endif %}
+  </div>
+  <p class="muted small">
+    One row per <code>.json</code> in <code>/cache</code>. Each film+config
+    is stored under <strong>two</strong> keys (quick fingerprint and content
+    fingerprint), so deleting just one of a pair leaves the other still
+    active — deleting both forces a full re-run.
+  </p>
+  {% if not vtt_entries %}
+    <p><em>VTT cache is empty.</em></p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Media</th>
+          <th>Lang</th>
+          <th>Mode</th>
+          <th>Provider</th>
+          <th>Whisper</th>
+          <th>Cues</th>
+          <th>Size</th>
+          <th>Modified</th>
+          <th>Key</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in vtt_entries %}
+        <tr>
+          <td>
+            {% if e.media_name %}
+              <span title="{{ e.media_path }}">{{ e.media_name }}</span>
+            {% elif e.preview %}
+              <span class="muted small" title="first cue text — media_path not stored in this entry">“{{ e.preview }}”</span>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if e.source_lang and e.target_lang %}
+              {{ e.source_lang }} → {{ e.target_lang }}
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td>{{ e.mode or '—' }}</td>
+          <td>{{ e.provider or '—' }}</td>
+          <td>{{ e.whisper_model or '—' }}</td>
+          <td>{{ e.cue_count if e.cue_count is not none else '—' }}</td>
+          <td>{{ e.size_bytes | filesizeformat }}</td>
+          <td><span class="muted small">{{ e.modified_at | ts_relative }}</span></td>
+          <td><code class="path small">{{ e.cache_key[:12] }}…</code></td>
+          <td>
+            <button type="button" class="secondary outline delete-vtt-btn"
+                    data-key="{{ e.cache_key }}"
+                    data-label="{{ e.media_name or e.cache_key }}"
+                    title="Delete this entry">✕</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+
+{# ── Transcript (STT) cache ─────────────────────────────────────── #}
+<section>
+  <div class="jobs-header">
+    <h2>Transcript cache <span class="muted">({{ transcript_entries|length }})</span></h2>
+    {% if transcript_entries %}
+      <button type="button" class="secondary outline clear-all-transcripts-btn"
+              data-count="{{ transcript_entries|length }}"
+              title="Delete every entry in the transcript cache">
+        Clear all
+      </button>
+    {% endif %}
+  </div>
+  <p class="muted small">
+    Whisper output cached between the STT and translation phases — lets a
+    crashed-at-80% job resume from translation without re-running the
+    half-hour of transcription. Delete an entry to force a fresh STT pass
+    on the next run (useful when changing Whisper config or testing VAD
+    settings).
+  </p>
+  {% if not transcript_entries %}
+    <p><em>Transcript cache is empty.</em></p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Backend</th>
+          <th>Whisper</th>
+          <th>VAD</th>
+          <th>Track</th>
+          <th>Lang</th>
+          <th>Cues</th>
+          <th>Size</th>
+          <th>Modified</th>
+          <th>Key</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in transcript_entries %}
+        <tr>
+          <td>{{ e.whisper_backend or '—' }}</td>
+          <td>{{ e.whisper_model or '—' }}</td>
+          <td>{{ 'on' if e.vad_enabled else ('off' if e.vad_enabled is sameas false else '—') }}</td>
+          <td>{{ e.track_index if e.track_index is not none else '—' }}</td>
+          <td>{{ e.detected_language or '—' }}</td>
+          <td>{{ e.cue_count }}</td>
+          <td>{{ e.size_bytes | filesizeformat }}</td>
+          <td><span class="muted small">{{ e.modified_at | ts_relative }}</span></td>
+          <td><code class="path small">{{ e.cache_key[:18] }}…</code></td>
+          <td>
+            <button type="button" class="secondary outline delete-transcript-btn"
+                    data-key="{{ e.cache_key }}"
+                    title="Delete this transcript">✕</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+
+<script>
+  // Per-row delete handlers. Each kind has its own endpoint but the UX is
+  // identical — confirm, fire-and-forget, then full-page reload so the
+  // table reflects the new on-disk state. Reload is fine here because the
+  // page is a snapshot view; nothing live to preserve.
+  function wireDeleteButtons(selector, urlBuilder, confirmMsg) {
+    document.querySelectorAll(selector).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const label = btn.dataset.label || btn.dataset.key;
+        if (!confirm(confirmMsg.replace('{label}', label))) return;
+        btn.disabled = true;
+        btn.textContent = '…';
+        try {
+          await fetch(urlBuilder(btn.dataset.key), { method: 'DELETE' });
+          window.location.reload();
+        } catch (e) {
+          alert('Delete failed: ' + e);
+          btn.disabled = false;
+          btn.textContent = '✕';
+        }
+      });
+    });
+  }
+
+  function wireClearAllButton(selector, url, kindLabel) {
+    document.querySelectorAll(selector).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const n = btn.dataset.count;
+        if (!confirm('Delete all ' + n + ' ' + kindLabel + ' entries?')) return;
+        btn.disabled = true;
+        btn.textContent = '…';
+        try {
+          await fetch(url, { method: 'POST' });
+          window.location.reload();
+        } catch (e) {
+          alert('Clear failed: ' + e);
+        }
+      });
+    });
+  }
+
+  wireDeleteButtons(
+    '.delete-vtt-btn',
+    k => '/api/cache/vtt/' + encodeURIComponent(k),
+    'Delete the cached subtitle for "{label}"? Next run will re-translate from the transcript cache (if still present) or re-do the full pipeline.',
+  );
+  wireDeleteButtons(
+    '.delete-transcript-btn',
+    k => '/api/cache/transcripts/' + encodeURIComponent(k),
+    'Delete this transcript? Next run will re-do the full STT (transcription) pass.',
+  );
+  wireClearAllButton('.clear-all-vtt-btn', '/api/cache/vtt/clear-all', 'VTT cache');
+  wireClearAllButton('.clear-all-transcripts-btn', '/api/cache/transcripts/clear-all', 'transcript');
+</script>
+{% endblock %}

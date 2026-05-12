@@ -379,3 +379,34 @@ def test_dashboard_renders_when_running_jobs_exist(client, monkeypatch):
 
     p = client.get("/partials/jobs")
     assert p.status_code == 200
+
+
+def test_cache_explorer_page_renders(client):
+    """GET /cache renders both sections (VTT + Transcript) without raising,
+    even with an empty cache dir. Catches Jinja template breakage on the
+    new page added in 0.7.4."""
+    r = client.get("/cache")
+    assert r.status_code == 200
+    assert "VTT cache" in r.text
+    assert "Transcript cache" in r.text
+
+
+def test_cache_explorer_api_endpoints_return_lists(client):
+    r = client.get("/api/cache/vtt")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+    r = client.get("/api/cache/transcripts")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_cache_explorer_delete_rejects_path_traversal(client):
+    """The HTTP layer must surface ValueError as 400, not let a malformed
+    key resolve to an arbitrary file. Most `..` shapes get caught earlier
+    by FastAPI's path routing (returns 404). The case our code is the
+    last line of defense for is a key with characters outside the safe
+    set — e.g. a space, a quote, anything not alphanum-plus-underscore-
+    -plus-dot-plus-hyphen. We use a space which routes through but trips
+    _validate_cache_key."""
+    r = client.delete("/api/cache/vtt/has%20space")
+    assert r.status_code == 400

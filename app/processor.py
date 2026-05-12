@@ -377,6 +377,10 @@ def process(
 
     payload = {
         "vtt": vtt,
+        # media_path lets the Cache Explorer UI render the film name without
+        # parsing the .vtt header. Older payloads (pre-0.7.4) don't carry it
+        # and fall back to whatever the NOTE line exposes.
+        "media_path": str(media),
         "source_track": {"index": track.index, "language": track.language, "title": track.title},
         "detected_source_language": transcription.detected_language,
         "cue_count": len(translated),

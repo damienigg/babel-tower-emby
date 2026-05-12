@@ -51,6 +51,29 @@ def _format_duration(seconds: float | int | None) -> str:
 
 templates.env.filters["duration"] = _format_duration
 
+
+def _ts_relative(epoch: float | int | None) -> str:
+    """Render a Unix epoch time as a compact "N ago" string for the Cache
+    Explorer's Modified column. We don't pull `humanize` for one column —
+    five buckets cover everything a user actually distinguishes between
+    when deciding which cache entry to delete."""
+    if not epoch:
+        return ""
+    import time
+    delta = max(0, int(time.time() - epoch))
+    if delta < 60:
+        return f"{delta}s ago"
+    if delta < 3600:
+        return f"{delta // 60}m ago"
+    if delta < 86400:
+        return f"{delta // 3600}h ago"
+    if delta < 30 * 86400:
+        return f"{delta // 86400}d ago"
+    return f"{delta // (30 * 86400)}mo ago"
+
+
+templates.env.filters["ts_relative"] = _ts_relative
+
 # Expose the server's current wall-clock time to every template render so
 # _jobs_table.html can compute elapsed_seconds + snapshot_at directly from
 # raw Job timestamps (started_at / finished_at). Without this, the template
@@ -781,6 +804,24 @@ def library(
             "libraries": libraries,
             "library_id": library_id or "",
             "error": error,
+        },
+    )
+
+
+@router.get("/cache", response_class=HTMLResponse)
+def cache_explorer_page(request: Request) -> HTMLResponse:
+    """The Cache Explorer page. Lists every VTT (result) cache entry and
+    every transcript (STT) cache entry side by side, with per-row delete
+    buttons so the user can force a re-run on a specific film without
+    SSH-ing into the host to find the right hashed filename."""
+    from app import cache_explorer as ce
+    return templates.TemplateResponse(
+        request,
+        "cache_explorer.html",
+        {
+            "vtt_entries": ce.list_vtt_entries(),
+            "transcript_entries": ce.list_transcript_entries(),
+            "active": "cache",
         },
     )
 

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 _log = logging.getLogger("subtitle_this")
 
-from app import jobs
+from app import cache_explorer, jobs
 from app.config import settings
 from app.processor import (
     BadRequest, ProcessRequest, process, validate_mode_provider_combo,
@@ -355,3 +355,55 @@ def clear_finished_jobs() -> dict:
     Returns ``{"cleared": N}`` where N is how many entries were removed."""
     n = jobs.clear_finished_jobs()
     return {"cleared": n}
+
+
+# ── Cache Explorer ────────────────────────────────────────────────────────
+
+
+@router.get("/cache/vtt")
+def cache_list_vtt() -> list[dict]:
+    """List every entry in the VTT (result) cache. One row per file on
+    disk — entries written under both the quick-fp and content-fp keys
+    appear twice, which the UI surfaces as a 2-line group."""
+    return [e.to_dict() for e in cache_explorer.list_vtt_entries()]
+
+
+@router.get("/cache/transcripts")
+def cache_list_transcripts() -> list[dict]:
+    """List every entry in the transcript (STT) cache."""
+    return [e.to_dict() for e in cache_explorer.list_transcript_entries()]
+
+
+@router.delete("/cache/vtt/{cache_key}")
+def cache_delete_vtt(cache_key: str) -> dict:
+    """Delete one VTT cache entry. The cache_key is the .json filename
+    stem (e.g. ``0c5fd2e47d4d2aa20bef9fc4``). 404 if it's not there,
+    400 if the key shape is suspicious (rejects path-traversal)."""
+    try:
+        removed = cache_explorer.delete_vtt_entry(cache_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not removed:
+        raise HTTPException(404, f"VTT cache entry {cache_key!r} not found")
+    return {"deleted": cache_key}
+
+
+@router.delete("/cache/transcripts/{cache_key}")
+def cache_delete_transcript(cache_key: str) -> dict:
+    try:
+        removed = cache_explorer.delete_transcript_entry(cache_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not removed:
+        raise HTTPException(404, f"transcript cache entry {cache_key!r} not found")
+    return {"deleted": cache_key}
+
+
+@router.post("/cache/vtt/clear-all")
+def cache_clear_all_vtt() -> dict:
+    return {"cleared": cache_explorer.clear_all_vtt_entries()}
+
+
+@router.post("/cache/transcripts/clear-all")
+def cache_clear_all_transcripts() -> dict:
+    return {"cleared": cache_explorer.clear_all_transcript_entries()}

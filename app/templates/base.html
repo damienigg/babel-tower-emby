@@ -75,6 +75,12 @@
     .status-pill.canceled { background: var(--bt-muted-bg); color: var(--bt-muted-fg); }
     .status-pill.muted { background: var(--bt-muted-bg); color: var(--bt-muted-fg); }
 
+    /* Tiny shared utilities — used in the Cache Explorer (and harmless if
+       reused elsewhere). Kept here rather than in a separate file because
+       the codebase has a single base.html with all the inline CSS. */
+    .muted { color: var(--pico-muted-color); }
+    .small { font-size: 0.85em; }
+
     /* Jobs section header — keeps the h2 and the "Clear finished" button on
        the same baseline. The button right-aligns and stays optically smaller
        than the heading so it reads as a maintenance action, not a primary CTA. */
@@ -391,6 +397,7 @@
       <ul>
         <li><a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>
         <li><a href="/library" class="{% if active == 'library' %}active{% endif %}">Library</a></li>
+        <li><a href="/cache" class="{% if active == 'cache' %}active{% endif %}">Cache</a></li>
         <li><a href="/settings" class="{% if active == 'settings' %}active{% endif %}">Settings</a></li>
       </ul>
     </nav>
