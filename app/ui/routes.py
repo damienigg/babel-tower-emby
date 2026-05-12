@@ -1063,6 +1063,41 @@ def _find_legacy_pipeline_metrics(output_path: str | None) -> dict | None:
     return None
 
 
+@router.get("/jobs/{job_id}/error", response_class=HTMLResponse)
+def job_error_page(request: Request, job_id: str) -> HTMLResponse:
+    """Full error detail page for a failed job — linked from the "▸ error"
+    pill in the Jobs table's Error column.
+
+    Renders the short error message AND the full Python traceback the
+    runner captured at failure time. Pre-0.7.25 records don't have a
+    traceback (we didn't capture one); they fall back to showing only
+    the short error string with a note explaining why."""
+    from fastapi import HTTPException
+    from app import jobs as jobs_mod
+    j = jobs_mod.get_job(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id!r} not found")
+    if j.status != "failed":
+        # Not failed — there's no error to show. Bounce back to the
+        # dashboard rather than render an empty page.
+        return HTMLResponse(
+            status_code=400,
+            content=(
+                f"<p>Job <code>{job_id}</code> has status "
+                f"<strong>{j.status}</strong>, not <em>failed</em>. "
+                f"<a href='/'>Back to dashboard</a>.</p>"
+            ),
+        )
+    return templates.TemplateResponse(
+        request,
+        "job_error.html",
+        {
+            "job": j,
+            "active": "dashboard",
+        },
+    )
+
+
 @router.get("/jobs/{job_id}/stats", response_class=HTMLResponse)
 def job_stats_page(request: Request, job_id: str) -> HTMLResponse:
     """Per-job version of the stats page — renders the same template

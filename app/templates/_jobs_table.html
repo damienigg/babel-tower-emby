@@ -147,7 +147,23 @@
               <span class="muted">—</span>
             {% endif %}
           </td>
-          <td>{{ j.error or '' }}</td>
+          <td>
+            {# Error cell: clickable pill that opens the full traceback
+               page rather than dumping the raw text inline (which used
+               to blow up the row layout on long messages). The pill
+               title attribute carries the short error line so a hover
+               still gives the quick "what went wrong" without needing
+               to click through. Empty cell on non-failed jobs. #}
+            {% if j.status == 'failed' %}
+              <a href="/jobs/{{ j.id }}/error"
+                 class="status-pill failed error-pill"
+                 title="{{ j.error or 'failed' }}">
+                 ▸ error
+              </a>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
           <td>
             {% if j.status in ('queued', 'running') %}
               <button type="button" class="secondary outline cancel-job-btn"

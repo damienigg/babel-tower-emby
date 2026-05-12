@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section>
+  <p class="muted small"><a href="/">← Dashboard</a></p>
+  <h1>Job error <span class="muted small">— {{ job.item_name or job.item_id }}</span></h1>
+  <p class="muted small">
+    Full detail of the failure captured by the job runner. The short
+    line at the top is what shows in the Jobs table's Error column;
+    the traceback below is everything the runner caught at failure
+    time. If you're reporting this as a bug, copy the full block.
+  </p>
+</section>
+
+<section>
+  <h2>Summary</h2>
+  <table class="kv">
+    <tr><th>Job ID</th><td><code>{{ job.id }}</code></td></tr>
+    <tr><th>Item</th><td>{{ job.item_name or job.item_id }}</td></tr>
+    <tr><th>Target lang</th><td>{{ job.target_lang }}</td></tr>
+    <tr><th>Mode</th><td>{{ job.mode }}</td></tr>
+    <tr><th>Provider</th><td>{{ job.provider }}</td></tr>
+    <tr><th>Whisper model</th><td>{{ job.whisper_model or '—' }}</td></tr>
+    <tr><th>Translation model</th><td>{{ job.translation_model or '—' }}</td></tr>
+    <tr><th>Status</th><td><span class="status-pill failed">{{ job.status }}</span></td></tr>
+    <tr><th>Progress at failure</th><td>
+      {{ job.progress_pct|round(0)|int }}%
+      {% if job.progress_stage %}· {{ job.progress_stage }}{% endif %}
+    </td></tr>
+    {% if job.started_at and job.finished_at %}
+    <tr><th>Ran for</th><td>{{ (job.finished_at - job.started_at)|int|duration }}</td></tr>
+    {% endif %}
+  </table>
+</section>
+
+<section>
+  <h2>Error message</h2>
+  <article style="background: var(--bt-err-bg); color: var(--bt-err-fg); border-color: var(--bt-err-bg); padding: 1rem;">
+    <code style="white-space: pre-wrap; word-break: break-word;">{{ job.error or '(no message)' }}</code>
+  </article>
+</section>
+
+<section>
+  <h2>Traceback</h2>
+  {% if job.error_detail %}
+    <button type="button" id="copy-traceback-btn"
+            class="secondary outline" style="margin-bottom: 0.5rem;">
+      Copy to clipboard
+    </button>
+    <pre id="traceback-block" style="background: var(--pico-card-background-color); padding: 0.85rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.4; max-height: 60vh;">{{ job.error_detail }}</pre>
+    <script>
+      document.getElementById('copy-traceback-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('copy-traceback-btn');
+        const text = document.getElementById('traceback-block').textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          const orig = btn.textContent;
+          btn.textContent = '✓ Copied';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        } catch (e) {
+          btn.textContent = 'Copy failed — select manually';
+        }
+      });
+    </script>
+  {% else %}
+    <p class="muted">
+      <em>No traceback was captured for this job. This is a pre-0.7.25
+      record — the runner only saved the short error line at the time.
+      Future failures will include the full traceback here.</em>
+    </p>
+  {% endif %}
+</section>
+
+<section>
+  <p class="muted small">
+    More context lives in the container logs:
+    <code>docker logs subtitle-this</code> (or your container name).
+    Search for the job ID <code>{{ job.id }}</code> to find the lines
+    around this failure.
+  </p>
+</section>
+{% endblock %}

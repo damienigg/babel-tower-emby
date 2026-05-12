@@ -53,6 +53,12 @@ class Job:
     mode: str
     status: str = "queued"           # queued | running | succeeded | failed | canceled
     error: str | None = None
+    # Full Python traceback captured at failure time. The short ``error``
+    # field is what fits in the Jobs table column; this one is the full
+    # multi-line ``traceback.format_exc()`` output that backs the
+    # /jobs/{id}/error page. None on succeeded / canceled / running jobs
+    # and on pre-0.7.25 records that never captured a traceback.
+    error_detail: str | None = None
     output_path: str | None = None
     cue_count: int | None = None
     # Whisper model the job ran with — snapshotted at submission time
@@ -289,13 +295,20 @@ def submit(
             except JobTimeout as e:
                 # Timeout is a failure, not a user-cancel — surface the
                 # reason so the UI shows what happened.
+                import traceback
                 job.status = "failed"
                 job.error = f"timeout: {e}"
+                job.error_detail = traceback.format_exc()
             except JobCanceled:
                 job.status = "canceled"
             except Exception as e:
+                # Capture the full traceback for the /jobs/{id}/error
+                # page. The short ``error`` line lives in the Jobs table
+                # column; the detail backs the clickable "▸ error" pill.
+                import traceback
                 job.status = "failed"
                 job.error = f"{type(e).__name__}: {e}"
+                job.error_detail = traceback.format_exc()
             finally:
                 job.finished_at = time.time()
                 _persist()   # commit terminal state to disk

@@ -7,6 +7,42 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.25] — 2026-05-12
+
+### Changed
+
+- **Jobs table Error column is now a clickable pill.** The raw
+  error text used to dump straight into a `<td>`, which made long
+  messages or multi-line strings wreck the row layout. The cell
+  now renders a compact `▸ error` pill (red, matching the failed
+  status pill it sits next to) linking to a new
+  ``/jobs/{id}/error`` page that shows:
+  - the short error line in a highlighted block,
+  - the full Python traceback in a `<pre>` block with a
+    "Copy to clipboard" button,
+  - a summary of the job (whisper model, translation model,
+    mode, progress at failure, runtime),
+  - a pointer to ``docker logs subtitle-this`` for surrounding
+    context.
+  The pill's `title` attribute still surfaces the short error on
+  hover so the quick "what went wrong" read costs no extra click.
+
+### Added
+
+- **``Job.error_detail`` field** captures
+  ``traceback.format_exc()`` at failure time. Backs the new
+  ``/jobs/{id}/error`` page. Optional (default None) so legacy
+  on-disk job records loaded by ``jobs_store`` don't break — the
+  error page renders a friendly "no traceback captured for this
+  pre-0.7.25 entry" note instead.
+
+### Tests
+
+- 4 new smoke tests for the error-detail flow: short message +
+  full traceback render, 404 on missing job, 400 on non-failed
+  job, graceful fallback for legacy jobs without a stored
+  traceback.
+
 ## [0.7.24] — 2026-05-12
 
 ### Fixed

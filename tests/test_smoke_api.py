@@ -746,6 +746,91 @@ def test_cache_repolish_endpoint_rewrites_vtt_in_place(client, tmp_path, monkeyp
     assert "00:00:11.20" in persisted["vtt"] or "00:00:11.200" in persisted["vtt"]
 
 
+def test_failed_job_renders_error_detail_page(client):
+    """0.7.25 added a clickable "▸ error" pill in the Jobs table that
+    opens /jobs/{id}/error and shows the FULL traceback (not just the
+    short message that used to be jammed into the table column). This
+    test plants a failed job with both fields and verifies the page
+    renders both."""
+    from app import jobs as jobs_mod
+    jobs_mod._jobs.clear()
+    j = jobs_mod.Job(
+        id="job-error-test", item_id="m1", item_name="Movie",
+        target_lang="fr", provider="nllb", mode="audio",
+        status="failed",
+        error="ValueError: demucs is not installed",
+        error_detail=(
+            "Traceback (most recent call last):\n"
+            "  File \"app/processor.py\", line 42, in process\n"
+            "    raise ValueError('demucs is not installed')\n"
+            "ValueError: demucs is not installed\n"
+        ),
+    )
+    jobs_mod._jobs[j.id] = j
+
+    r = client.get(f"/jobs/{j.id}/error")
+    assert r.status_code == 200
+    html = r.text
+    # Short error message rendered in its own section
+    assert "ValueError: demucs is not installed" in html
+    # Full traceback rendered in the <pre> block
+    assert "Traceback (most recent call last):" in html
+    assert "app/processor.py" in html
+    # Copy-to-clipboard affordance is wired in
+    assert "copy-traceback-btn" in html
+
+    jobs_mod._jobs.clear()
+
+
+def test_error_page_404_when_job_missing(client):
+    """Linking to a non-existent job ID returns 404 — not 500."""
+    from app import jobs as jobs_mod
+    jobs_mod._jobs.clear()
+    r = client.get("/jobs/no-such-job/error")
+    assert r.status_code == 404
+
+
+def test_error_page_400_when_job_not_failed(client):
+    """The page is only meaningful for failed jobs — a succeeded job
+    bounces with a 400 + a friendly back-to-dashboard message rather
+    than rendering an empty error section."""
+    from app import jobs as jobs_mod
+    jobs_mod._jobs.clear()
+    j = jobs_mod.Job(
+        id="job-ok-test", item_id="m1", item_name="Movie",
+        target_lang="fr", provider="nllb", mode="audio",
+        status="succeeded",
+    )
+    jobs_mod._jobs[j.id] = j
+
+    r = client.get(f"/jobs/{j.id}/error")
+    assert r.status_code == 400
+    assert "succeeded" in r.text.lower()
+    jobs_mod._jobs.clear()
+
+
+def test_error_page_handles_pre_0_7_25_job_without_traceback(client):
+    """A failed job loaded from disk that was recorded before 0.7.25
+    won't have error_detail — the page still renders, just shows the
+    "no traceback captured" fallback note instead of the pre block."""
+    from app import jobs as jobs_mod
+    jobs_mod._jobs.clear()
+    j = jobs_mod.Job(
+        id="job-legacy-test", item_id="m1", item_name="Movie",
+        target_lang="fr", provider="nllb", mode="audio",
+        status="failed",
+        error="OOMError: killed",
+        error_detail=None,
+    )
+    jobs_mod._jobs[j.id] = j
+
+    r = client.get(f"/jobs/{j.id}/error")
+    assert r.status_code == 200
+    assert "OOMError: killed" in r.text
+    assert "No traceback was captured" in r.text
+    jobs_mod._jobs.clear()
+
+
 def test_cache_repolish_refreshes_job_quality_score(client, tmp_path, monkeypatch):
     """Regression for the "Jobs table pill stays stale after re-polish"
     bug: when /api/cache/vtt/{key}/repolish overwrites the .vtt next to

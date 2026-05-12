@@ -82,6 +82,16 @@
       text-decoration: none;
     }
     a.output-pill:hover { filter: brightness(1.12); }
+    /* Error pill in the Jobs table — same red as the status-pill.failed
+       it sits next to, but rendered as an <a> with the click affordance.
+       Replaces the inline raw error text which used to blow up the row
+       layout on long stack traces / messages. Hover brightens like the
+       other linked pills. */
+    a.error-pill {
+      text-decoration: none;
+      cursor: pointer;
+    }
+    a.error-pill:hover { filter: brightness(1.15); }
     /* Quality grade pills (Jobs table). Same shape as status-pill but
        colored by letter so the dashboard reads like a row of grades at
        a glance — A green, F red — without having to parse numbers.
