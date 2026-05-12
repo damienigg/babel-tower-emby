@@ -160,6 +160,49 @@ def test_list_vtt_skips_runtime_files_and_subdirs(cache_root):
     assert keys == {"real0000"}
 
 
+def test_list_vtt_collapses_quick_and_content_fp_pairs(cache_root):
+    """The two-level cache writes each payload under TWO keys (quick
+    fingerprint + content fingerprint). The listing must collapse those
+    into one logical row — otherwise the user sees every film twice with
+    identical metadata. The two cache_keys both end up in `cache_keys`
+    so a delete can remove the pair together."""
+    body = (
+        "WEBVTT\n\n"
+        "NOTE Subtitle This auto-subs (en -> fr, mode=audio, "
+        "whisper=large-v3-turbo, provider=nllb)\n\n"
+        "00:01:00.000 --> 00:01:02.000\nHello\n"
+    )
+    _write_vtt_entry(cache_root, "quickfp00000000",
+                     media_path="/m/film.mkv", vtt_body=body)
+    _write_vtt_entry(cache_root, "contentfp0000000",
+                     media_path="/m/film.mkv", vtt_body=body)
+
+    entries = cache_explorer.list_vtt_entries()
+
+    assert len(entries) == 1, [e.cache_keys for e in entries]
+    e = entries[0]
+    assert set(e.cache_keys) == {"quickfp00000000", "contentfp0000000"}
+    # Size aggregates across both files in the group.
+    assert e.size_bytes > 0
+
+
+def test_list_vtt_keeps_different_films_separate(cache_root):
+    """Two distinct films with the same lang/mode/provider/whisper still
+    each get their own row — the dedupe is by media_path among other
+    things, not just by header config."""
+    body_a = (
+        "WEBVTT\n\nNOTE Subtitle This auto-subs (en -> fr, mode=audio, "
+        "whisper=large-v3-turbo, provider=nllb)\n\n"
+        "00:00:01.000 --> 00:00:02.000\nA\n"
+    )
+    body_b = body_a   # same NOTE header, different media_path
+    _write_vtt_entry(cache_root, "film_a_quick", media_path="/m/A.mkv", vtt_body=body_a)
+    _write_vtt_entry(cache_root, "film_b_quick", media_path="/m/B.mkv", vtt_body=body_b)
+
+    entries = cache_explorer.list_vtt_entries()
+    assert len(entries) == 2
+
+
 def test_list_vtt_sorts_newest_first(cache_root):
     p1 = _write_vtt_entry(cache_root, "old00000", media_path="/m/a.mkv",
                           vtt_body="WEBVTT\n")

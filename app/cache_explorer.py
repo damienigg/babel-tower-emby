@@ -53,8 +53,17 @@ _NOTE_RE = re.compile(
 
 @dataclass
 class VttEntry:
-    """One row in the VTT-cache section of the Cache Explorer."""
-    cache_key: str                       # filename stem (no .json)
+    """One row in the VTT-cache section of the Cache Explorer.
+
+    Note on cache_keys vs cache_key: each logical entry is written
+    twice on disk — under the quick-fingerprint key AND the content-
+    fingerprint key — so the two-level lookup can hit either. From the
+    user's perspective those two files are the same record. The UI
+    dedupes them into a single row; ``cache_key`` is the "primary"
+    (the one used for stats / download URLs), ``cache_keys`` carries
+    the full set so a delete removes them together."""
+    cache_key: str                       # filename stem of the primary file
+    cache_keys: list[str] = field(default_factory=list)   # all files in this group
     media_path: str | None = None        # populated for 0.7.4+ entries
     media_name: str | None = None        # basename of media_path, for display
     source_lang: str | None = None
@@ -63,8 +72,8 @@ class VttEntry:
     provider: str | None = None
     whisper_model: str | None = None
     cue_count: int | None = None
-    size_bytes: int = 0
-    modified_at: float = 0.0
+    size_bytes: int = 0                  # sum across all files in the group
+    modified_at: float = 0.0             # max mtime in the group
     preview: str | None = None           # first cue's text, truncated
 
     def to_dict(self) -> dict[str, Any]:
@@ -141,14 +150,39 @@ def _parse_vtt_payload(path: Path) -> VttEntry:
     return entry
 
 
+def _dedupe_key(e: VttEntry) -> tuple:
+    """The "logical record" identifier — two on-disk files with the
+    same dedupe key represent the same run (two-level cache writes
+    each payload under both the quick-fp and content-fp keys). Used
+    to collapse those into one UI row."""
+    return (
+        e.media_path or "",
+        e.source_lang or "",
+        e.target_lang or "",
+        e.mode or "",
+        e.provider or "",
+        e.whisper_model or "",
+        # Fall-back fingerprint for legacy entries missing media_path
+        # AND a NOTE header — preview text is the next-best identity.
+        # Stays empty for fully-populated entries so dedupe is stable.
+        e.preview or "" if not e.media_path else "",
+    )
+
+
 def list_vtt_entries() -> list[VttEntry]:
     """Walk cache_dir/*.json (NOT recursing into subdirs — transcripts/
-    lives one level down and is handled separately). Newest entry first
-    so the user sees their recent runs at the top."""
-    out: list[VttEntry] = []
+    lives one level down and is handled separately).
+
+    Logically deduplicated: each VTT entry is written to disk under
+    two keys (quick-fp + content-fp), so a naive listing would show
+    each film twice with identical metadata. We group by the
+    ``_dedupe_key`` tuple and present one row per logical record;
+    ``cache_keys`` carries the full set so delete removes them
+    together. Newest group first."""
     root = Path(settings.cache_dir)
     if not root.is_dir():
-        return out
+        return []
+    raw: list[VttEntry] = []
     for child in root.iterdir():
         # Top-level .json only — skip subdirs (transcripts/, etc.) and
         # the runtime overrides / jobs files. Those aren't subtitle
@@ -157,7 +191,27 @@ def list_vtt_entries() -> list[VttEntry]:
             continue
         if child.name in {"settings.json", "jobs.json"}:
             continue
-        out.append(_parse_vtt_payload(child))
+        raw.append(_parse_vtt_payload(child))
+
+    # Group + merge by dedupe key. Within a group: keep one entry,
+    # promote all cache_keys, sum sizes, take the latest mtime.
+    groups: dict[tuple, VttEntry] = {}
+    for e in raw:
+        key = _dedupe_key(e)
+        if key not in groups:
+            e.cache_keys = [e.cache_key]
+            groups[key] = e
+        else:
+            merged = groups[key]
+            merged.cache_keys.append(e.cache_key)
+            merged.size_bytes += e.size_bytes
+            if e.modified_at > merged.modified_at:
+                merged.modified_at = e.modified_at
+                # Promote the newer file's cache_key as the primary
+                # so stats / download URLs hit the freshest copy if
+                # the two diverged for any reason.
+                merged.cache_key = e.cache_key
+    out = list(groups.values())
     out.sort(key=lambda e: e.modified_at, reverse=True)
     return out
 

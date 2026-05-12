@@ -7,6 +7,47 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.9] — 2026-05-12
+
+Three feedback-driven UI polish items.
+
+### Changed
+
+- **Cache Explorer** dedupes the two-level cache pairs. Each VTT
+  entry is written to disk under both the quick-fingerprint key
+  AND the content-fingerprint key (so a path/mtime change doesn't
+  miss the cache), which previously produced two identical rows
+  per film. The listing now groups them by
+  `(media_path, source_lang, target_lang, mode, provider, whisper_model)`
+  and shows one row per logical record with a `(×2)` annotation
+  on the cache_key column. Delete sends one request per
+  underlying key so the pair vanishes together.
+- **Translation pill** in the Jobs table now includes the model
+  name: `nllb · distilled-1.3B` instead of just `nllb`, `llm ·
+  claude-opus-4-7` instead of `llm`. HuggingFace IDs are
+  short-formed (last path segment) so the pill stays compact. DeepL
+  has no per-model dimension, renders as `deepl` alone.
+
+### Added
+
+- New **Quality** column in the Jobs table — a per-run grade pill
+  ("78 · B"), color-coded by letter grade. The pill links to a
+  per-job stats page (`/jobs/{id}/stats`) which renders the full
+  quality breakdown straight from the job's `output_path` (no
+  cache_key lookup needed). New backend fields
+  `Job.quality_score` / `Job.quality_grade` set in the runner
+  after the .vtt is written; legacy jobs and still-running ones
+  render a muted dash.
+- New `Job.translation_model` field — snapshotted at submission
+  from `settings.nllb_model` / `settings.translation_llm_model`
+  / empty for DeepL.
+
+### Tests
+
+- 2 new tests in `tests/test_cache_explorer.py`: dedup collapses
+  quick-fp + content-fp pairs into one row; two distinct films
+  with the same NOTE header still get their own rows.
+
 ## [0.7.8] — 2026-05-12
 
 Jobs table rework + Quality Score on the stats page.

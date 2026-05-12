@@ -82,6 +82,18 @@
       text-decoration: none;
     }
     a.output-pill:hover { filter: brightness(1.12); }
+    /* Quality grade pills (Jobs table). Same shape as status-pill but
+       colored by letter so the dashboard reads like a row of grades at
+       a glance — A green, F red — without having to parse numbers. */
+    a.quality-pill {
+      text-decoration: none; font-variant-numeric: tabular-nums;
+    }
+    a.quality-pill:hover { filter: brightness(1.12); }
+    .quality-pill-A { background: var(--bt-ok-bg);     color: var(--bt-ok-fg); }
+    .quality-pill-B { background: var(--bt-active-bg); color: var(--bt-active-fg); }
+    .quality-pill-C { background: var(--bt-info-bg);   color: var(--bt-info-fg); }
+    .quality-pill-D { background: var(--bt-warn-bg);   color: var(--bt-warn-fg); }
+    .quality-pill-F { background: var(--bt-err-bg);    color: var(--bt-err-fg); }
 
     /* Tiny shared utilities — used in the Cache Explorer (and harmless if
        reused elsewhere). Kept here rather than in a separate file because

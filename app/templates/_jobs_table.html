@@ -32,6 +32,7 @@
           <th>Mode</th>
           <th>STT</th>
           <th>Translation</th>
+          <th>Quality</th>
           <th>Output</th>
           <th>Error</th>
           <th></th>
@@ -88,7 +89,31 @@
               <span class="muted">—</span>
             {% endif %}
           </td>
-          <td><span class="status-pill muted">{{ j.provider }}</span></td>
+          <td>
+            {# Translation pill shows the provider and (when applicable)
+               the specific model — nllb · distilled-1.3B, llm · claude-opus-4-7,
+               etc. DeepL has no per-model dimension. The model name is
+               truncated to the last segment after a slash so HuggingFace IDs
+               (facebook/nllb-200-distilled-1.3B) render cleanly. #}
+            {% set _tr_model = j.translation_model.rsplit('/', 1)[-1] if j.translation_model else '' %}
+            <span class="status-pill muted">
+              {{ j.provider }}{% if _tr_model %} · {{ _tr_model }}{% endif %}
+            </span>
+          </td>
+          <td>
+            {# Per-run quality pill, color-graded by letter (A green … F red).
+               Hidden until the runner finishes computing it — running and
+               failed jobs render a muted dash. #}
+            {% if j.quality_score is not none and j.quality_grade %}
+              <a href="/jobs/{{ j.id }}/stats"
+                 class="status-pill quality-pill quality-pill-{{ j.quality_grade }}"
+                 title="Open the full quality breakdown for this run">
+                 {{ j.quality_score }} · {{ j.quality_grade }}
+              </a>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
           <td>
             {# Output cell: when the job has produced a .vtt, render it as
                a clickable pill that opens the file in a new tab via

@@ -59,6 +59,16 @@ class Job:
     # so the jobs table can show "what STT did this use" even if the
     # user changed the setting between submission and completion.
     whisper_model: str | None = None
+    # Translation model — NLLB model id for the nllb provider, the
+    # LLM model for the llm provider, empty for deepl (no per-model
+    # selection there). Same snapshot-at-submit reasoning as
+    # whisper_model.
+    translation_model: str | None = None
+    # Heuristic quality score (0-100) computed at job-completion time
+    # from the resulting .vtt + pipeline metrics. None on jobs that
+    # didn't reach the writer (failed / canceled / still running).
+    quality_score: int | None = None
+    quality_grade: str | None = None     # A/B/C/D/F — same source
     queued_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
@@ -219,6 +229,7 @@ def submit(
     mode: str,
     runner: Callable[[Job], Awaitable[None]],
     whisper_model: str | None = None,
+    translation_model: str | None = None,
 ) -> Job:
     """Queue a job; runner does the actual work and updates the job in place.
 
@@ -233,6 +244,7 @@ def submit(
         provider=provider,
         mode=mode,
         whisper_model=whisper_model,
+        translation_model=translation_model,
     )
     with _jobs_lock:
         _jobs[job.id] = job

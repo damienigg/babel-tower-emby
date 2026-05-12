@@ -75,7 +75,11 @@
           <td>{{ e.cue_count if e.cue_count is not none else '—' }}</td>
           <td>{{ e.size_bytes | filesizeformat }}</td>
           <td><span class="muted small">{{ e.modified_at | ts_relative }}</span></td>
-          <td><code class="path small">{{ e.cache_key[:12] }}…</code></td>
+          <td>
+            <code class="path small" title="{{ e.cache_keys | join(' + ') }}">
+              {{ e.cache_key[:12] }}…{% if e.cache_keys|length > 1 %}<span class="muted small"> (×{{ e.cache_keys|length }})</span>{% endif %}
+            </code>
+          </td>
           <td class="row-actions">
             <a href="/cache/vtt/{{ e.cache_key }}/stats"
                class="secondary outline action-btn"
@@ -85,7 +89,7 @@
                     data-label="{{ e.media_name or e.cache_key }}"
                     title="Download stats JSON for this entry">💾</button>
             <button type="button" class="secondary outline delete-vtt-btn"
-                    data-key="{{ e.cache_key }}"
+                    data-keys="{{ e.cache_keys | join(',') }}"
                     data-label="{{ e.media_name or e.cache_key }}"
                     title="Delete this entry">✕</button>
           </td>
@@ -162,15 +166,21 @@
   // identical — confirm, fire-and-forget, then full-page reload so the
   // table reflects the new on-disk state. Reload is fine here because the
   // page is a snapshot view; nothing live to preserve.
+  //
+  // The VTT cache stores each logical entry under two keys (quick-fp +
+  // content-fp), so a delete might cover multiple files. The button
+  // carries data-keys (comma-separated) — we fan out one DELETE per key
+  // and only reload once they all settle.
   function wireDeleteButtons(selector, urlBuilder, confirmMsg) {
     document.querySelectorAll(selector).forEach(btn => {
       btn.addEventListener('click', async () => {
-        const label = btn.dataset.label || btn.dataset.key;
+        const label = btn.dataset.label || btn.dataset.keys || btn.dataset.key;
         if (!confirm(confirmMsg.replace('{label}', label))) return;
         btn.disabled = true;
         btn.textContent = '…';
         try {
-          await fetch(urlBuilder(btn.dataset.key), { method: 'DELETE' });
+          const keys = (btn.dataset.keys || btn.dataset.key || '').split(',').filter(Boolean);
+          await Promise.all(keys.map(k => fetch(urlBuilder(k), { method: 'DELETE' })));
           window.location.reload();
         } catch (e) {
           alert('Delete failed: ' + e);

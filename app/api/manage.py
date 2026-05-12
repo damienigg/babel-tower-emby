@@ -168,6 +168,28 @@ def submit_item_job(
         job.output_path = str(out)
         job.cue_count = result.cue_count
 
+        # Compute the heuristic quality score and stamp it on the job
+        # so the dashboard's Jobs table can show a per-run grade pill.
+        # Cheap (millisecond-scale text-parse on the just-written .vtt)
+        # and only runs on the success path, so a failure here can't
+        # take down the surrounding job.
+        try:
+            from app import stats as stats_mod
+            from app import quality as quality_mod
+            stats_record = stats_mod.compute_from_vtt(
+                result.vtt,
+                media_path=str(media),
+                mode=result.mode,
+                detected_source_language=result.detected_source_language,
+                took_seconds=result.took_seconds,
+                pipeline_metrics=result.pipeline_metrics,
+            )
+            q = quality_mod.compute_quality_score(stats_record)
+            job.quality_score = q.score
+            job.quality_grade = q.grade
+        except Exception:
+            _log.warning("quality score computation failed", exc_info=True)
+
         # The .stats.json sidecar is written by processor.process()
         # into cache_dir/stats/, not here — keeping it inside the
         # cache avoids polluting the user's movie folder with
@@ -207,6 +229,16 @@ def submit_item_job(
                 item_id, e,
             )
 
+    # Resolve the translation model identifier for the active provider.
+    # NLLB → nllb_model (HuggingFace ID), LLM → translation_llm_model,
+    # DeepL has no per-model selection so we leave it empty.
+    if provider == "nllb":
+        translation_model = settings.nllb_model
+    elif provider == "llm":
+        translation_model = settings.translation_llm_model
+    else:
+        translation_model = None
+
     return jobs.submit(
         item_id=item.id,
         item_name=item.name,
@@ -215,6 +247,7 @@ def submit_item_job(
         mode=job_mode,
         runner=runner,
         whisper_model=settings.whisper_model,
+        translation_model=translation_model,
     )
 
 

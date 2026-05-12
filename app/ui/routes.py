@@ -808,6 +808,53 @@ def library(
     )
 
 
+@router.get("/jobs/{job_id}/stats", response_class=HTMLResponse)
+def job_stats_page(request: Request, job_id: str) -> HTMLResponse:
+    """Per-job version of the stats page — renders the same template
+    the Cache Explorer uses, but reads the .vtt straight from the
+    job's recorded output_path (no cache_key lookup needed). Linked
+    from the Quality pill in the Jobs table so the user can drill
+    into "why is this run a B and not an A" without having to find
+    the matching Cache Explorer row by hand."""
+    from fastapi import HTTPException
+    from pathlib import Path
+    from app import jobs as jobs_mod
+    from app import stats as stats_mod
+    j = jobs_mod.get_job(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id!r} not found")
+    if not j.output_path:
+        raise HTTPException(
+            404,
+            f"job {job_id!r} produced no .vtt yet (still running / failed / canceled)",
+        )
+    path = Path(j.output_path)
+    if not path.is_file():
+        raise HTTPException(
+            404,
+            f"output file {path.name!r} no longer exists on disk",
+        )
+    try:
+        vtt_text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(500, f"could not read output: {e}")
+    record = stats_mod.compute_from_vtt(
+        vtt_text,
+        media_path=str(path),
+        cache_key=f"job:{job_id}",
+        mode=j.mode,
+    )
+    return templates.TemplateResponse(
+        request,
+        "cache_stats.html",
+        {
+            "stats": record,
+            "cache_key": f"job:{job_id}",
+            "active": "dashboard",
+        },
+    )
+
+
 @router.get("/cache/vtt/{cache_key}/stats", response_class=HTMLResponse)
 def cache_stats_page(request: Request, cache_key: str) -> HTMLResponse:
     """Render the per-entry quality/coverage stats page. Same numbers
