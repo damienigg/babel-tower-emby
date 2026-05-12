@@ -29,8 +29,20 @@ from app.pipeline.stt import Cue, TranscriptionResult
 
 @pytest.fixture
 def cache_dir(tmp_path, monkeypatch):
-    """Isolate each test under tmp_path/cache."""
+    """Isolate each test under tmp_path/cache.
+
+    Belt-and-suspenders: also strip any pre-existing ``cache_dir``
+    instance attribute on ``settings`` that a prior test (in this
+    file or another) may have left behind via
+    ``settings.cache_dir = X``. Without that strip, the instance
+    attribute permanently shadows ``_overrides`` and the redirect
+    here silently fails — every test reads/writes the polluted dir
+    and order-dependent cross-test leakage starts to show up
+    (an _vi0 file from one test surviving into another test's
+    cache_dir, etc.)."""
     from app.config import settings
+    if "cache_dir" in settings.__dict__:
+        monkeypatch.delattr(settings, "cache_dir", raising=False)
     cdir = tmp_path / "cache"
     cdir.mkdir()
     monkeypatch.setattr(
@@ -108,6 +120,29 @@ def test_changing_content_fingerprint_invalidates_cache(cache_dir):
     assert transcript_cache.lookup("fp2", "small", "openvino", True, 0) is None
 
 
+def test_toggling_vocal_isolation_invalidates_cache(cache_dir):
+    """Whisper sees a fundamentally different audio signal when
+    Demucs runs first (vocals stem) vs. when the raw mix is fed in.
+    A cache hit across the boundary would silently feed back the
+    wrong transcript on toggle."""
+    transcript_cache.store(
+        "fp1", "small", "openvino", True, 0, _make_result(),
+        vocal_isolation_enabled=True,
+    )
+    # vocal_isolation off → miss
+    assert transcript_cache.lookup(
+        "fp1", "small", "openvino", True, 0,
+        vocal_isolation_enabled=False,
+    ) is None
+    # same flag → hit
+    got = transcript_cache.lookup(
+        "fp1", "small", "openvino", True, 0,
+        vocal_isolation_enabled=True,
+    )
+    assert got is not None
+    assert len(got.cues) == 3
+
+
 # ── Empty results not cached ──────────────────────────────────────────────
 
 
@@ -178,18 +213,19 @@ def test_store_swallows_io_errors(cache_dir, monkeypatch):
 
 
 def test_key_includes_all_dimensions(cache_dir):
-    """Keys for any pair of distinct (model, backend, vad, track, fp)
-    must differ — important for correctness, and a regression here
-    would silently return wrong transcripts."""
+    """Keys for any pair of distinct (model, backend, vad, vocal_isolation,
+    track, fp) must differ — important for correctness, and a regression
+    here would silently return wrong transcripts."""
     keys = set()
     for fp in ("a", "b"):
         for model in ("small", "medium"):
             for backend in ("openvino", "cpu"):
                 for vad in (True, False):
-                    for t in (0, 1):
-                        keys.add(transcript_cache._key(fp, model, backend, vad, t))
-    # 2 × 2 × 2 × 2 × 2 = 32 unique
-    assert len(keys) == 32
+                    for vi in (True, False):
+                        for t in (0, 1):
+                            keys.add(transcript_cache._key(fp, model, backend, vad, t, vi))
+    # 2 × 2 × 2 × 2 × 2 × 2 = 64 unique
+    assert len(keys) == 64
 
 
 def test_key_normalizes_slashes_in_model_name(cache_dir):

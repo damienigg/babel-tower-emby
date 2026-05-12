@@ -284,17 +284,57 @@ def process(
         settings.whisper_backend,
         settings.vad_enabled,
         track.index,
+        vocal_isolation_enabled=bool(settings.vocal_isolation_enabled),
     )
     transcript_from_cache = transcription is not None
+    # Captures the Demucs metrics so the stats page can show "isolation
+    # ran for N seconds, output spent 0 RAM during STT". None when the
+    # phase didn't run this job — either disabled, or cache hit.
+    vocal_isolation_metrics = None
     if transcript_from_cache:
-        # Hit: skip audio extraction + Whisper. Jump the progress bar
-        # straight to the start of translation so the user sees the
-        # phase change immediately.
+        # Hit: skip audio extraction + isolation + Whisper. Jump the
+        # progress bar straight to the start of translation so the user
+        # sees the phase change immediately.
         progress(80, "translating (transcript cache hit)")
         check_cancel()
     else:
-        with audio.extract_audio(req.media_path, track.index) as wav_path:
-            progress(3, "detecting language" if needs_detection_pre_pass else "transcribing")
+        # Choose the audio prep path: vocals-only (Demucs) or raw track.
+        # Both yield the same shape — a 16 kHz mono WAV at a Path. STT
+        # downstream doesn't care which one produced it.
+        if settings.vocal_isolation_enabled:
+            from app.pipeline import vocal_isolation as vi
+            audio_ctx = vi.isolate_vocals(
+                req.media_path, track.index,
+                progress=_scaled(progress, base=0, span=8, stage="isolating vocals"),
+                check_cancel=check_cancel,
+            )
+        else:
+            audio_ctx = audio.extract_audio(req.media_path, track.index)
+
+        with audio_ctx as audio_handle:
+            # vocal_isolation yields an IsolationResult; audio.extract_audio
+            # yields a bare Path. Normalize to a Path here so the STT call
+            # is identical for both paths.
+            if hasattr(audio_handle, "wav_path"):
+                wav_path = audio_handle.wav_path
+                from app.pipeline_metrics import VocalIsolationMetrics
+                rt = (
+                    audio_handle.audio_seconds_processed
+                    / audio_handle.took_seconds
+                    if audio_handle.took_seconds > 0 else 0.0
+                )
+                vocal_isolation_metrics = VocalIsolationMetrics(
+                    enabled=True,
+                    model=audio_handle.model,
+                    took_seconds=audio_handle.took_seconds,
+                    audio_seconds_processed=audio_handle.audio_seconds_processed,
+                    realtime_factor=round(rt, 2),
+                )
+            else:
+                wav_path = audio_handle
+
+            progress(8 if settings.vocal_isolation_enabled else 3,
+                     "detecting language" if needs_detection_pre_pass else "transcribing")
             check_cancel()
             language_hint = track.language
             if needs_detection_pre_pass:
@@ -302,18 +342,28 @@ def process(
                 detected = lang_detect.detect(wav_path)
                 if detected:
                     language_hint = detected
-                progress(8, "transcribing")
+                progress(10 if settings.vocal_isolation_enabled else 8, "transcribing")
                 check_cancel()
+            stt_base = 10 if settings.vocal_isolation_enabled else 8
+            stt_span = 80 - stt_base
             transcription = stt.transcribe(
                 wav_path,
                 language_hint=language_hint,
-                progress=_scaled(progress, base=8, span=72, stage="transcribing"),
+                progress=_scaled(progress, base=stt_base, span=stt_span, stage="transcribing"),
                 check_cancel=check_cancel,
             )
         # Store BEFORE the translation phase begins. If translation crashes
         # mid-flight, the next retry hits this entry and skips the 30+ min
         # of Whisper. Empty-cue transcriptions are not stored (transcript_cache
         # handles that internally).
+        # Fold the isolation metrics into transcription.pipeline_metrics
+        # so they ride into the transcript cache and the stats sidecar
+        # alongside VAD/packing/whisper telemetry.
+        if vocal_isolation_metrics is not None:
+            from app import pipeline_metrics as pm_mod
+            if transcription.pipeline_metrics is None:
+                transcription.pipeline_metrics = pm_mod.PipelineMetrics()
+            transcription.pipeline_metrics.vocal_isolation = vocal_isolation_metrics
         transcript_cache.store(
             transcript_content_fp,
             settings.whisper_model,
@@ -321,6 +371,7 @@ def process(
             settings.vad_enabled,
             track.index,
             transcription,
+            vocal_isolation_enabled=bool(settings.vocal_isolation_enabled),
         )
 
     if not transcription.cues:

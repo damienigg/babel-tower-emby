@@ -294,6 +294,40 @@ _FIELD_META: list[dict[str, Any]] = [
              "to-Emby step is skipped for non-MKV. Turn off entirely to keep all source "
              "files completely pristine."},
 
+    # ── Vocal isolation (Demucs) ──────────────────────────────────────────────
+    {"key": "vocal_isolation_enabled", "section": "Speech-to-Text",
+     "label": "Vocal isolation before STT (Demucs)",
+     "type": "checkbox",
+     "help": "Splits the source audio into stems and keeps only the "
+             "VOCALS stem before feeding it to Whisper. The score, "
+             "ambience, and SFX are removed so Whisper transcribes a "
+             "clean speech signal. Closes most of the 'climax dialog "
+             "buried under music' gap on action/sci-fi films "
+             "(Inception, Dunkirk, Tenet). \n\n"
+             "Costs: an extra 8-30 min of CPU per 2 h film (Demucs "
+             "runs ~4-10× realtime on a 4-core container) and "
+             "requires the optional `demucs` package in the image "
+             "(`pip install demucs>=4.0`). The model runs as a "
+             "distinct phase BEFORE Whisper loads — when STT starts, "
+             "Demucs has already released its ~1 GB of RAM. \n\n"
+             "Heuristic for when to turn this on: continuous loud "
+             "score that drowns dialogue. Marginal on dialog-driven "
+             "dramas with sparse music."},
+    {"key": "vocal_isolation_model", "section": "Speech-to-Text",
+     "label": "Demucs model", "type": "select",
+     "show_if": {"field": "vocal_isolation_enabled", "equals": "true"},
+     "options": [
+         {"value": "htdemucs",
+          "label": "htdemucs · [~80 MB · 4-stem · best quality · slowest] separates vocals + drums + bass + other"},
+         {"value": "mdx_extra_q",
+          "label": "mdx_extra_q · [quantized · 2-stem · faster · lighter] vocals vs no_vocals"},
+     ],
+     "help": "htdemucs is the default 4-stem model — best general "
+             "quality, separates drums/bass/other/vocals. "
+             "mdx_extra_q is a quantized 2-stem variant that's about "
+             "30% faster with slightly lower fidelity on the vocals "
+             "stem. Either downloads to HF_HOME on first run."},
+
     # ── Speech-to-Text ────────────────────────────────────────────────────────
     {"key": "whisper_backend", "section": "Speech-to-Text",
      "label": "Backend", "type": "select",

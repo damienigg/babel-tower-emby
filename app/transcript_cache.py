@@ -25,6 +25,10 @@ Whisper's output:
 - **vad_enabled** — toggles silence pre-filtering; materially
   changes the cue list (silent-region hallucinations on vs. off).
 - **track_index** — which audio track was selected.
+- **vocal_isolation** — whether the audio fed to Whisper was the
+  raw track or the Demucs vocals stem; the cue list differs
+  materially between the two. Encoded as "viYES"/"viNO" so the
+  flag survives toggling cleanly across runs.
 
 NOT in the key (deliberately):
 
@@ -71,8 +75,8 @@ def _pm_from_dict(data: dict) -> "PipelineMetrics | None":
     if not isinstance(data, dict):
         return None
     from app.pipeline_metrics import (
-        PipelineMetrics, VadMetrics, PackingMetrics, WhisperMetrics,
-        TranslationMetrics,
+        PipelineMetrics, VocalIsolationMetrics, VadMetrics, PackingMetrics,
+        WhisperMetrics, TranslationMetrics,
     )
     def _construct(cls, src):
         if not isinstance(src, dict):
@@ -82,6 +86,7 @@ def _pm_from_dict(data: dict) -> "PipelineMetrics | None":
         known = {f.name for f in cls.__dataclass_fields__.values()}
         return cls(**{k: v for k, v in src.items() if k in known})
     return PipelineMetrics(
+        vocal_isolation=_construct(VocalIsolationMetrics, data.get("vocal_isolation")),
         vad=_construct(VadMetrics, data.get("vad")),
         packing=_construct(PackingMetrics, data.get("packing")),
         whisper=_construct(WhisperMetrics, data.get("whisper")),
@@ -95,6 +100,7 @@ def _key(
     whisper_backend: str,
     vad_enabled: bool,
     track_index: int,
+    vocal_isolation_enabled: bool = False,
 ) -> str:
     """Stable composite key. Order matters only for readability — these
     fields are concatenated, not hashed, so changing order would break
@@ -102,7 +108,10 @@ def _key(
     version prefix (and accept the one-time miss across upgrade).
 
     Schema versions:
-    - v2 (current): cues carry source-audio-absolute timestamps.
+    - v3 (current): adds vocal_isolation_enabled dimension. Audio fed
+      to Whisper is materially different (full mix vs vocals stem)
+      so transcripts can't be shared between the two modes.
+    - v2 (pre-0.7.23): cues carry source-audio-absolute timestamps.
     - v1 (pre-0.7.2): cues from multi-segment runs had timestamps stamped
       segment-relative because the region-packing remap dropped the
       additive seg_offset_seconds. Files with v1-shaped timestamps look
@@ -111,11 +120,12 @@ def _key(
       re-transcribe so users don't silently inherit broken caches.
     """
     return (
-        f"v2"
+        f"v3"
         f"_{content_fp}"
         f"_{whisper_backend}"
         f"_{whisper_model.replace('/', '-')}"
         f"_vad{int(bool(vad_enabled))}"
+        f"_vi{int(bool(vocal_isolation_enabled))}"
         f"_t{track_index}"
     )
 
@@ -126,11 +136,12 @@ def lookup(
     whisper_backend: str,
     vad_enabled: bool,
     track_index: int,
+    vocal_isolation_enabled: bool = False,
 ) -> TranscriptionResult | None:
     """Returns the cached transcription for these inputs, or None on miss
     or corrupted file. Never raises — failures are logged + the file is
     quarantined so the next run can re-transcribe cleanly."""
-    path = _store_dir() / f"{_key(content_fp, whisper_model, whisper_backend, vad_enabled, track_index)}.json"
+    path = _store_dir() / f"{_key(content_fp, whisper_model, whisper_backend, vad_enabled, track_index, vocal_isolation_enabled)}.json"
     if not path.exists():
         return None
     try:
@@ -166,6 +177,7 @@ def store(
     vad_enabled: bool,
     track_index: int,
     result: TranscriptionResult,
+    vocal_isolation_enabled: bool = False,
 ) -> None:
     """Persist the transcription. Atomic — writes to ``.tmp`` and renames.
     Best-effort: any IO error is logged and swallowed, since persistence
@@ -175,7 +187,7 @@ def store(
     store_dir = _store_dir()
     try:
         store_dir.mkdir(parents=True, exist_ok=True)
-        path = store_dir / f"{_key(content_fp, whisper_model, whisper_backend, vad_enabled, track_index)}.json"
+        path = store_dir / f"{_key(content_fp, whisper_model, whisper_backend, vad_enabled, track_index, vocal_isolation_enabled)}.json"
         tmp = path.with_suffix(".tmp")
         payload = {
             "detected_language": result.detected_language,

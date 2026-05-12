@@ -1,6 +1,6 @@
 [project]
 name = "subtitle-this"
-version = "0.7.22"
+version = "0.7.23"
 description = "Speech-to-text + LLM translation service for Emby, Jellyfin, and Plex"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,6 +20,12 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+]
+# Demucs vocal-isolation phase. Heavy dep (pulls torchaudio, julius,
+# diffq) — opt-in so the slim install path stays light. Both shipped
+# Docker images include this extra by default.
+vocal-isolation = [
+    "demucs>=4.0",
 ]
 
 [build-system]

@@ -214,6 +214,35 @@
 {% if stats.pipeline_metrics %}
   {% set pm = stats.pipeline_metrics %}
 
+  {# Vocal isolation section (Demucs) #}
+  {% if pm.vocal_isolation and pm.vocal_isolation.enabled %}
+    {% set vi = pm.vocal_isolation %}
+    <section>
+      <h2>Vocal isolation <span class="muted small">(Demucs — strips music + SFX from the source audio before STT)</span></h2>
+      <table class="kv">
+        <tr><th>Model</th><td>{{ vi.model or '—' }}</td></tr>
+        <tr><th>Wall clock</th><td>{{ vi.took_seconds|int|duration }}
+          <span class="muted small">({{ vi.took_seconds }} s)</span></td></tr>
+        <tr><th>Audio processed</th><td>{{ vi.audio_seconds_processed|int|duration }}
+          <span class="muted small">({{ vi.audio_seconds_processed }} s)</span></td></tr>
+        <tr><th>Speed</th><td>
+          {{ vi.realtime_factor }}× realtime
+          <span class="muted small">
+            (CPU htdemucs typically 4-10× realtime; below 1× means
+            Demucs spent more time isolating than the audio's own
+            length — usually small CPU or a long film)
+          </span>
+        </td></tr>
+      </table>
+      <p class="muted small">
+        With isolation ON, Whisper saw the vocals stem only. Compare
+        cue coverage in the 10-min buckets above against a prior run
+        with isolation OFF — gains should show up in stretches where
+        score/SFX dominate the original mix (typically the climax).
+      </p>
+    </section>
+  {% endif %}
+
   {# VAD section #}
   {% if pm.vad %}
     {% set vad = pm.vad %}

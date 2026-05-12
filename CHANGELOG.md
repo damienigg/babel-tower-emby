@@ -7,6 +7,73 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.23] — 2026-05-12
+
+### Added
+
+- **Vocal isolation phase (Demucs) before STT.** A new pipeline
+  phase that splits the source audio into stems (drums / bass /
+  other / vocals) and feeds only the **vocals** stem to Whisper.
+  Cuts most of the "VAD rejected the climax because Hans Zimmer
+  drowns the dialogue" pathology on action/sci-fi films. The
+  Inception diagnostic showed the climax + ending (130-145 min)
+  with 33-0 % dialog coverage vs the pro reference — almost
+  entirely because the score dominates the mix. Isolation gives
+  Whisper a clean speech signal.
+
+  **Phase-level RAM lifecycle.** The Demucs model loads inside
+  the phase, runs ``apply_model`` once, and is **explicitly
+  released** (``release_model()`` → ``gc.collect()`` →
+  ``malloc_trim(0)``) BEFORE the yield that hands the vocals
+  WAV to STT. By the time Whisper enters its with-block, Demucs
+  occupies zero resident memory. Same pattern that already keeps
+  Whisper / NLLB / vision-LLM weights from piling on top of
+  each other in 12 GB cgroups.
+
+  **Opt-in.** Default OFF, controlled by a new
+  ``vocal_isolation_enabled`` setting + a Demucs model picker
+  (``vocal_isolation_model``: ``htdemucs`` default, ``mdx_extra_q``
+  for the quantized 2-stem variant). The dependency is optional
+  — install via the new ``vocal-isolation`` extra
+  (``pip install subtitle-this[vocal-isolation]``); both shipped
+  Docker images now bundle ``demucs>=4.0`` by default.
+
+  **Costs.** Adds 8-30 min of CPU per 2 h film at 4-10× realtime
+  on a 4-core container. Heuristic for turning it on: continuous
+  loud score that drowns dialogue. Marginal on dialog-driven
+  dramas with sparse music.
+
+- **VocalIsolationMetrics** on ``PipelineMetrics``: model,
+  took_seconds, audio_seconds_processed, realtime_factor.
+  Surfaced as a dedicated section on the Cache Stats page so
+  the operator can compare runs with isolation ON vs OFF and
+  see the dialog-coverage gain in the per-10-min buckets.
+
+### Changed
+
+- **Transcript cache schema bumped v2 → v3** to include
+  ``vocal_isolation_enabled`` in the key. Audio fed to Whisper
+  is materially different between the two modes (vocals stem vs
+  full mix) so transcripts can't be shared across the toggle.
+  v2 entries become silent misses on first lookup (one-time
+  re-transcribe per film).
+
+### Tests
+
+- New ``tests/test_vocal_isolation.py`` (12 tests) with a faked
+  ``demucs.api`` module — no real Demucs needed in CI. Pins the
+  lifecycle invariants: model released before yield, WAV files
+  cleaned on exit (incl. exception paths), progress callback
+  fires [0, 1], cancel-before-load aborts cleanly, missing-
+  vocals-stem case raises rather than silently mis-routing,
+  ``is_available()`` reports import status correctly.
+- Updated ``test_transcript_cache.py`` to cover the new
+  vocal_isolation key dimension (32 → 64 unique keys across
+  the dimension-product test). Hardened its cache_dir fixture
+  with the same instance-attr strip pattern the smoke_api
+  fixture uses, so a polluting prior test can't shadow
+  ``settings._overrides``.
+
 ## [0.7.22] — 2026-05-12
 
 ### Fixed

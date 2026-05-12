@@ -25,6 +25,31 @@ class _EnvSettings(BaseSettings):
 
     cache_dir: Path = Path("/cache")
 
+    # ── Vocal isolation (Demucs) ─────────────────────────────────────
+    # Pre-STT phase that splits the source audio into stems and keeps
+    # only the vocals — so Whisper transcribes a clean speech signal
+    # instead of dialog buried under score/SFX. Closes most of the
+    # "VAD rejected the climax because the music dominates" gap.
+    #
+    # OFF by default for two reasons:
+    # (1) Adds 8-30 min of CPU time per 2 h film — significant cost.
+    # (2) Requires the optional ``demucs`` package which isn't part
+    #     of the slim default install. Toggling this ON without
+    #     demucs available surfaces a clear error at job start time
+    #     rather than at import time.
+    #
+    # When considering whether to turn this on: the heuristic is
+    # "does the film have a continuous loud score that drowns
+    # dialogue?" Inception / Dunkirk / sci-fi action: yes, big win.
+    # Dialog-driven dramas with sparse score: marginal win.
+    vocal_isolation_enabled: bool = False
+    # Demucs model identifier. ``htdemucs`` is the default 4-stem
+    # model (drums/bass/other/vocals) — best general quality.
+    # ``mdx_extra_q`` is the quantized 2-stem (vocals/no_vocals)
+    # variant — faster + lighter, slightly worse fidelity. Both
+    # download to ``HF_HOME`` on first run (~80-160 MB each).
+    vocal_isolation_model: str = "htdemucs"
+
     # STT
     whisper_backend: str = "cpu"
     whisper_model: str = "small"

@@ -34,7 +34,8 @@ RUN pip install --no-cache-dir \
     'jinja2>=3.1' \
     'python-multipart>=0.0.9' \
     'transformers>=4.45' \
-    'sentencepiece>=0.2'
+    'sentencepiece>=0.2' \
+    'demucs>=4.0'
 
 COPY --chown=app:app app/ ./app/
 

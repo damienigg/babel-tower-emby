@@ -48,6 +48,26 @@ def _bin_index(duration_s: float) -> int:
 
 
 @dataclass
+class VocalIsolationMetrics:
+    """Captured when the Demucs vocal-isolation phase ran. None when the
+    feature was off for this run — downstream consumers gate the stats
+    page section on presence.
+
+    The headline number is ``took_seconds`` vs ``audio_seconds_processed``:
+    a 2 h film with took=900 s means Demucs ran at ~8x realtime, which
+    is the realistic ceiling on a 4-core CPU-bound container."""
+    enabled: bool = False
+    model: str | None = None
+    took_seconds: float = 0.0
+    audio_seconds_processed: float = 0.0
+    # realtime_factor = audio_seconds_processed / took_seconds.
+    # >1 = ran faster than the audio length (good); <1 = slower
+    # than realtime (expected on CPU + htdemucs). Rounded to 2 sig
+    # figs because more precision would be misleading.
+    realtime_factor: float = 0.0
+
+
+@dataclass
 class VadMetrics:
     """Aggregated across every per-segment ``detect_speech`` call in
     one run. Numbers refer to the source audio (one track, the one
@@ -174,6 +194,7 @@ class PipelineMetrics:
     so consumers downstream (stats sidecar, transcript cache replay)
     can gracefully degrade if a particular phase wasn't instrumented
     in the run that produced the payload."""
+    vocal_isolation: VocalIsolationMetrics | None = None
     vad: VadMetrics | None = None
     packing: PackingMetrics | None = None
     whisper: WhisperMetrics | None = None
