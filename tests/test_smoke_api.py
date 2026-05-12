@@ -476,6 +476,90 @@ def test_cache_stats_api_404_when_missing(client):
     assert r.status_code == 404
 
 
+def test_dashboard_redirects_to_wizard_when_server_not_configured(client, monkeypatch):
+    """First-run: fresh install with no media_server_url or api_key
+    set should redirect the user from the dashboard to /onboarding
+    so they get guided setup instead of an empty dashboard."""
+    from app.config import settings as runtime_settings
+    monkeypatch.setattr(
+        runtime_settings, "_overrides",
+        {**runtime_settings._overrides,
+         "media_server_url": "", "media_server_api_key": ""},
+    )
+
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/onboarding"
+
+
+def test_dashboard_skip_wizard_query_param_bypasses_redirect(client, monkeypatch):
+    """The wizard's "Skip — I'll configure manually" link adds
+    ?skip_wizard=1 to the dashboard URL so power users can land on
+    the dashboard without filling in the wizard first."""
+    from app.config import settings as runtime_settings
+    monkeypatch.setattr(
+        runtime_settings, "_overrides",
+        {**runtime_settings._overrides,
+         "media_server_url": "", "media_server_api_key": ""},
+    )
+
+    r = client.get("/?skip_wizard=1", follow_redirects=False)
+    assert r.status_code == 200
+
+
+def test_dashboard_no_redirect_when_server_is_configured(client, monkeypatch):
+    """Already-configured installs go straight to the dashboard
+    without ever seeing /onboarding."""
+    from app.config import settings as runtime_settings
+    monkeypatch.setattr(
+        runtime_settings, "_overrides",
+        {**runtime_settings._overrides,
+         "media_server_url": "http://emby.lan:8096",
+         "media_server_api_key": "abc"},
+    )
+
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 200
+
+
+def test_onboarding_page_renders(client):
+    """The wizard template renders without error and shows the three
+    section headers."""
+    r = client.get("/onboarding")
+    assert r.status_code == 200
+    body = r.text
+    assert "Connect to your media server" in body
+    assert "Pick your defaults" in body
+    assert "You're done" in body
+
+
+def test_onboarding_save_redirects_to_library(client, monkeypatch):
+    """Submitting the wizard updates settings via the same path as
+    Settings, then redirects to /library where the user actually
+    works."""
+    from app.config import settings as runtime_settings
+    monkeypatch.setattr(
+        runtime_settings, "_overrides", dict(runtime_settings._overrides),
+    )
+    r = client.post(
+        "/onboarding",
+        data={
+            "media_server_type": "emby",
+            "media_server_url": "http://emby.lan:8096",
+            "media_server_api_key": "test-key",
+            "default_target_lang": "fr",
+            "default_mode": "audio",
+            "default_translation_provider": "nllb",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/library"
+    # The values landed in _overrides.
+    assert runtime_settings._overrides.get("media_server_url") == "http://emby.lan:8096"
+    assert runtime_settings._overrides.get("media_server_api_key") == "test-key"
+
+
 def test_cache_explorer_delete_rejects_path_traversal(client):
     """The HTTP layer must surface ValueError as 400, not let a malformed
     key resolve to an arbitrary file. Most `..` shapes get caught earlier

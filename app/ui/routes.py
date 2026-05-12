@@ -10,6 +10,7 @@ from typing import Any, get_args, get_origin, get_type_hints
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 
 from app import __version__, jobs
 from app.api.manage import media_server_client
@@ -722,6 +723,17 @@ def _coerce(key: str, raw: str) -> Any:
 
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request) -> HTMLResponse:
+    """Dashboard — the home page. First-time users (no media server
+    configured) are redirected to the onboarding wizard so they don't
+    have to figure out the 40+ field Settings page on day one."""
+    from fastapi.responses import RedirectResponse
+    if not (settings.media_server_url and settings.media_server_api_key):
+        # Skip the redirect if the user explicitly asked for the dashboard
+        # via the ?skip_wizard=1 escape hatch (link from the wizard's
+        # "I'll configure manually" option).
+        if request.query_params.get("skip_wizard") != "1":
+            return RedirectResponse(url="/onboarding", status_code=303)
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -732,6 +744,68 @@ def dashboard(request: Request) -> HTMLResponse:
             "active": "dashboard",
         },
     )
+
+
+@router.get("/onboarding", response_class=HTMLResponse)
+def onboarding_page(request: Request) -> HTMLResponse:
+    """First-run wizard. A focused 3-step form that gets a fresh user
+    from "fresh install" to "ready to subtitle their first film"
+    without having to navigate the full Settings form.
+
+    The form posts to /onboarding which delegates to the same backend
+    update path Settings uses, so there's no duplicated validation
+    logic — the wizard is purely a UX shell over /api/settings.
+    """
+    vals = settings.all_values(mask_sensitive=True)
+    return templates.TemplateResponse(
+        request,
+        "onboarding.html",
+        {
+            "values": vals,
+            "already_configured": bool(
+                settings.media_server_url and settings.media_server_api_key
+            ),
+            "active": "dashboard",   # Dashboard nav stays highlighted
+        },
+    )
+
+
+@router.post("/onboarding", response_class=HTMLResponse)
+async def onboarding_save(request: Request) -> HTMLResponse:
+    """Save the wizard's three sections in one shot, then redirect to
+    the Library so the user lands on their content. Re-uses the
+    SettingsStore.update path so validation is shared with the regular
+    Settings form."""
+    from fastapi.responses import RedirectResponse
+    form = await request.form()
+    # Only update the fields the wizard exposes. Trim empties so they
+    # don't overwrite existing values with blanks on partial saves.
+    updates: dict[str, Any] = {}
+    for key in (
+        "media_server_type", "media_server_url", "media_server_api_key",
+        "default_target_lang", "default_mode", "default_translation_provider",
+    ):
+        v = form.get(key)
+        if v is not None and str(v).strip():
+            updates[key] = str(v).strip()
+    if updates:
+        try:
+            settings.update(updates)
+        except (ValueError, ValidationError) as e:
+            # Re-render the wizard with the error rather than redirecting,
+            # so the user sees what went wrong without losing their work.
+            return templates.TemplateResponse(
+                request,
+                "onboarding.html",
+                {
+                    "values": {**settings.all_values(mask_sensitive=True), **updates},
+                    "already_configured": False,
+                    "error": str(e),
+                    "active": "dashboard",
+                },
+                status_code=400,
+            )
+    return RedirectResponse(url="/library", status_code=303)
 
 
 @router.get("/partials/jobs", response_class=HTMLResponse)

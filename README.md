@@ -41,11 +41,22 @@ You only need to configure anything beyond the media server credentials if you w
 
 1. Bring up the container (see [Quick start](#quick-start) below).
 2. Open `http://<host>:8765/`.
-3. Settings page → **Media server** section is at the top: pick your server type (Emby / Jellyfin / Plex), paste URL + API key (X-Plex-Token for Plex), save. Settings persist to disk and apply at runtime — no restart.
+3. **First run only**: the onboarding wizard walks you through 3 steps — pick your server type (Emby / Jellyfin / Plex), paste URL + API key (X-Plex-Token for Plex), choose your default subtitle language, and you're done. Power users can skip the wizard via the link in its header and go straight to the full Settings page.
 4. Library page → browse your server's items. Click *Subtitle this* on a row, or tick checkboxes on multiple rows and hit *Subtitle selected* (selection persists across pages).
-5. Watch the dashboard — jobs auto-refresh every 3 seconds.
+5. Watch the dashboard — jobs auto-refresh every 3 seconds, complete with a Quality score per run.
 
 That's the entire flow.
+
+## What you get
+
+- **Free-by-default subtitle generation**: Whisper STT (local) + NLLB-200 translation (local, ~30 languages out of the box). No API keys required to make subtitles.
+- **Optional better quality** via DeepL (500k chars/mo free) or any LLM endpoint (Claude / GPT / local Ollama / LM Studio — anything OpenAI-compatible).
+- **Quality observability built in** — every finished run produces a stats record with VAD coverage, region-packing diagnostics, Whisper hallucination counters, translation char-ratios, plus a heuristic 0-100 Quality Score with a per-factor breakdown. No more "did the subtitle generation work?" guessing.
+- **Cache Explorer** UI page — list / inspect / delete / download stats per cached subtitle. Re-runs no longer require SSH into the host to find the right hashed filename.
+- **Per-job stats page** linked from the Jobs table's Quality pill — see exactly which pathology cost which points, with inline thresholds explaining what the numbers mean.
+- **Crash-resilient job tracking**: jobs persist to disk, so an OOM or container restart leaves a clear trace ("failed at 80 % translating") instead of silently evaporating.
+- **Settings migration framework** — version bumps automatically clean up renamed/dead fields in your `settings.json`, with a clear log line at startup. You don't have to maintain config across releases.
+- **Single Docker service**, plain HTML+HTMX UI, no plugin to install on your media server.
 
 ## Supported media servers
 
@@ -106,6 +117,36 @@ The mode controls how much visual context the translator gets. The tier is encod
 | `cinematic` | Everything `scene` does **plus** one keyframe per cue attached to translation calls. The translator literally sees what's on screen for each line. | $$$ | + per-cue frame extraction + many more API calls |
 
 **Default is `audio`.** scene and cinematic require translation provider = `llm` with a vision-capable model — see [Advanced: upgrading from defaults](#advanced-upgrading-from-defaults).
+
+## Quality observability
+
+Every finished run produces a JSON stats record persisted in
+`<cache_dir>/stats/<cache_key>.json`. The same data is rendered on
+the **Cache** tab in the web UI, with a per-row 📊 button that opens
+the full breakdown — duration histogram, per-10-min coverage buckets,
+VAD speech ratio + region distribution, region-packing pad-drop /
+snap-recovery counts, Whisper hallucination counter, translation
+char-ratio / empty / duplicate counts, plus a heuristic 0-100
+**Quality Score** with a per-factor table that explains which
+pathology cost which points.
+
+The Jobs table on the Dashboard surfaces the Quality Score as a
+color-coded pill (A green … F red) next to the Output pill. Click
+it to open the same breakdown page directly from the job — no need
+to find the matching Cache Explorer row.
+
+Why this matters: "completed" doesn't mean "correct". A run can
+finish without error but silently drop 40 % of dialog because of
+a Whisper-timestamp / region-packing interaction (this happened
+to Inception in 0.7.0 — see CHANGELOG). The Quality Score detects
+the known pathologies and tells you BEFORE you discover the gap
+during movie night.
+
+The score is a pipeline-health heuristic, not a measure of
+translation correctness — we have no ground truth to compare
+against. A score of 95 means "no red flags in the pipeline's
+behavior"; a score of 50 means "the pipeline mis-behaved in
+known ways — go look at the breakdown".
 
 ## Generating a media-server API key / token
 

@@ -359,6 +359,48 @@
       line-height: 1.45; max-width: 70ch;
     }
 
+    /* Onboarding wizard layout — vertical stack of "step" cards with
+       a numbered badge in each header. Same Pico baseline as the rest
+       of the app, just visually grouped so the user can tell they're
+       in a guided flow rather than the full Settings form. */
+    .onboarding-hero {
+      margin-bottom: 1rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 1px solid var(--pico-card-border-color);
+    }
+    .onboarding-hero h1 { margin-bottom: 0.25rem; }
+    .onboarding-step {
+      background: var(--pico-card-background-color);
+      border-left: 4px solid var(--bt-active-bg);
+      border-radius: 0.35rem;
+      padding: 0.8rem 1rem;
+      margin-bottom: 1rem;
+    }
+    .onboarding-step > header { margin-bottom: 0.6rem; }
+    .onboarding-step .step-number {
+      display: inline-block;
+      width: 1.6rem; height: 1.6rem;
+      line-height: 1.6rem; text-align: center;
+      background: var(--bt-active-bg); color: var(--bt-active-fg);
+      border-radius: 50%;
+      font-weight: 700; font-size: 0.9em;
+      margin-right: 0.6rem; vertical-align: middle;
+    }
+    .onboarding-step h2 {
+      display: inline-block; vertical-align: middle;
+      margin-bottom: 0; font-size: 1.15em;
+    }
+    .onboarding-step .field { margin-bottom: 0.7rem; }
+    .onboarding-step .field-help {
+      font-size: 0.85em; color: var(--pico-muted-color);
+      margin-top: 0.2rem; line-height: 1.4;
+    }
+    .onboarding-test-row {
+      margin-top: 0.6rem; display: flex; align-items: center;
+      gap: 0.6rem; flex-wrap: wrap;
+    }
+    .onboarding-actions { padding-top: 0.4rem; }
+
     /* Hidden state for conditional fields */
     .field-hidden { display: none; }
 

@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}Subtitle This — Get started{% endblock %}
+
+{% block content %}
+<section class="onboarding-hero">
+  <h1>Welcome to Subtitle This</h1>
+  <p class="muted">
+    Three short steps and you're ready to generate your first subtitle.
+    None of these choices are permanent — everything's editable later
+    on the <a href="/settings">Settings</a> page.
+  </p>
+  {% if already_configured %}
+    <p class="status-pill ok">
+      ✓ A media server is already configured. You can re-run this wizard
+      to change settings, or
+      <a href="/?skip_wizard=1" style="color: inherit; text-decoration: underline;">jump straight to the dashboard</a>.
+    </p>
+  {% endif %}
+</section>
+
+{% if error %}
+  <article style="background: var(--bt-err-bg); color: var(--bt-err-fg); border-color: var(--bt-err-bg);">
+    ✗ {{ error }}
+  </article>
+{% endif %}
+
+<form method="post" action="/onboarding" id="onboarding-form">
+
+  {# ── Step 1: media server ─────────────────────────────────────── #}
+  <section class="onboarding-step">
+    <header>
+      <span class="step-number">1</span>
+      <h2>Connect to your media server</h2>
+      <p class="section-help muted small">
+        Subtitle This reads your library from <strong>Emby, Jellyfin, or Plex</strong>.
+        Pick the one you run, paste its URL and an API key, then click
+        <em>Test connection</em> below to verify it works before saving.
+      </p>
+    </header>
+
+    <div class="grid-fields">
+      <div class="field">
+        <label for="media_server_type"><strong>Server type</strong></label>
+        <select id="media_server_type" name="media_server_type" required>
+          {% set _cur_type = values.get('media_server_type', 'emby') %}
+          <option value="emby"     {% if _cur_type == 'emby' %}selected{% endif %}>Emby</option>
+          <option value="jellyfin" {% if _cur_type == 'jellyfin' %}selected{% endif %}>Jellyfin</option>
+          <option value="plex"     {% if _cur_type == 'plex' %}selected{% endif %}>Plex</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="media_server_url"><strong>URL</strong></label>
+        <input type="text" id="media_server_url" name="media_server_url" required
+               placeholder="http://192.168.1.10:8096"
+               value="{{ values.get('media_server_url') or '' }}">
+        <p class="field-help">
+          The address your media server's web UI runs on. For Plex this is
+          typically port 32400; Emby and Jellyfin default to 8096.
+        </p>
+      </div>
+
+      <div class="field">
+        <label for="media_server_api_key"><strong>API key</strong></label>
+        <input type="password" id="media_server_api_key" name="media_server_api_key" required
+               placeholder="paste your API key (or X-Plex-Token for Plex)"
+               value="">
+        <p class="field-help">
+          <strong>Emby/Jellyfin:</strong> Dashboard → API Keys → New API Key.
+          <strong>Plex:</strong> grab your <em>X-Plex-Token</em> from any
+          browser request to your server (see Plex's docs).
+          {% if values.get('media_server_api_key') == '[set]' %}
+            <em>(An API key is already saved — leave this blank to keep it.)</em>
+          {% endif %}
+        </p>
+      </div>
+    </div>
+
+    <div class="onboarding-test-row">
+      <button type="button" id="test-connection-btn" class="secondary outline">
+        Test connection
+      </button>
+      <span id="test-connection-result" class="muted small" aria-live="polite"></span>
+    </div>
+  </section>
+
+  {# ── Step 2: defaults ────────────────────────────────────────── #}
+  <section class="onboarding-step">
+    <header>
+      <span class="step-number">2</span>
+      <h2>Pick your defaults</h2>
+      <p class="section-help muted small">
+        Which language do you want subtitles in, how much should the app
+        do per cue, and which translator should it use. You can override
+        any of these per-job from the Library, so just set the most
+        common combination here.
+      </p>
+    </header>
+
+    <div class="grid-fields">
+      <div class="field">
+        <label for="default_target_lang"><strong>Subtitle language</strong></label>
+        <select id="default_target_lang" name="default_target_lang">
+          {% set _cur_lang = values.get('default_target_lang', 'fr') %}
+          {# Top picks first, full list below — most users want one of these. #}
+          <optgroup label="Most common">
+            <option value="fr" {% if _cur_lang == 'fr' %}selected{% endif %}>French (fr)</option>
+            <option value="en" {% if _cur_lang == 'en' %}selected{% endif %}>English (en)</option>
+            <option value="es" {% if _cur_lang == 'es' %}selected{% endif %}>Spanish (es)</option>
+            <option value="de" {% if _cur_lang == 'de' %}selected{% endif %}>German (de)</option>
+            <option value="it" {% if _cur_lang == 'it' %}selected{% endif %}>Italian (it)</option>
+            <option value="pt" {% if _cur_lang == 'pt' %}selected{% endif %}>Portuguese (pt)</option>
+          </optgroup>
+          {# Full list for everyone else. Built dynamically from LANGUAGE_OPTIONS
+             at render — keeps this template short. #}
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="default_mode"><strong>Mode</strong></label>
+        {% set _cur_mode = values.get('default_mode', 'audio') %}
+        <select id="default_mode" name="default_mode">
+          <option value="audio"      {% if _cur_mode == 'audio' %}selected{% endif %}>audio · simplest, no extra cost</option>
+          <option value="scene"      {% if _cur_mode == 'scene' %}selected{% endif %}>scene · adds ~20 vision-LLM calls per film (better pronouns/gender)</option>
+          <option value="cinematic"  {% if _cur_mode == 'cinematic' %}selected{% endif %}>cinematic · LLM sees each cue's frame (best, slowest)</option>
+        </select>
+        <p class="field-help">
+          <strong>audio</strong> is the recommended starting point. Scene
+          and cinematic require an LLM-based provider (see below) and
+          a vision-capable model.
+        </p>
+      </div>
+
+      <div class="field">
+        <label for="default_translation_provider"><strong>Translator</strong></label>
+        {% set _cur_prov = values.get('default_translation_provider', 'nllb') %}
+        <select id="default_translation_provider" name="default_translation_provider">
+          <option value="nllb"  {% if _cur_prov == 'nllb' %}selected{% endif %}>nllb · FREE · LOCAL · ~30 popular languages · works out of the box</option>
+          <option value="deepl" {% if _cur_prov == 'deepl' %}selected{% endif %}>deepl · 500k chars/mo free · best EU/Asian pairs · needs API key</option>
+          <option value="llm"   {% if _cur_prov == 'llm' %}selected{% endif %}>llm · best quality on any pair · needs an LLM endpoint configured</option>
+        </select>
+        <p class="field-help">
+          Stay on <strong>nllb</strong> for the zero-config path — it
+          works the second you finish this wizard with no extra setup.
+          Switch later in Settings if you want better quality.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  {# ── Step 3: confirm ────────────────────────────────────────── #}
+  <section class="onboarding-step">
+    <header>
+      <span class="step-number">3</span>
+      <h2>You're done</h2>
+      <p class="section-help muted small">
+        Hit <em>Save &amp; open Library</em> and you'll land on your
+        media library, ready to click <strong>Subtitle this</strong>
+        on the first film you want to caption. The first NLLB run
+        downloads ~1.5 GB of model weights — subsequent runs use
+        the cached model.
+      </p>
+    </header>
+
+    <div class="onboarding-actions">
+      <button type="submit" class="primary">Save &amp; open Library →</button>
+      <a href="/?skip_wizard=1" class="muted small" style="margin-left: 1rem;">
+        Skip wizard — I'll configure manually
+      </a>
+    </div>
+  </section>
+</form>
+
+<script>
+  // "Test connection" button — hits /api/server/health with the form's
+  // current values BEFORE the user has saved them. The endpoint reads
+  // settings.media_server_url from disk, so to test against the user's
+  // typed-but-not-yet-saved values we do a "preview save": PATCH the
+  // settings transiently, probe, then leave the values in place since
+  // the user is about to save anyway. This is the same path the regular
+  // settings form takes — no special test-only endpoint needed.
+  document.getElementById('test-connection-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('test-connection-btn');
+    const out = document.getElementById('test-connection-result');
+    const type = document.getElementById('media_server_type').value;
+    const url = document.getElementById('media_server_url').value.trim();
+    const key = document.getElementById('media_server_api_key').value;
+    if (!url) {
+      out.textContent = '⚠ Enter a URL first.';
+      out.className = 'small warn-text';
+      return;
+    }
+    btn.disabled = true;
+    out.textContent = 'Testing…';
+    out.className = 'muted small';
+    try {
+      // Stage the values via the same PATCH the Settings form uses.
+      const patchBody = { media_server_type: type, media_server_url: url };
+      if (key) patchBody.media_server_api_key = key;
+      const patch = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patchBody),
+      });
+      if (!patch.ok) {
+        const detail = await patch.text();
+        out.textContent = '✗ Settings rejected: ' + detail;
+        out.className = 'small warn-text';
+        return;
+      }
+      // Now probe.
+      const r = await fetch('/api/server/health');
+      const data = await r.json();
+      if (data.reachable) {
+        out.textContent = '✓ Connected to ' + (data.type || type) + '.';
+        out.className = 'small';
+        out.style.color = 'var(--bt-ok-fg)';
+      } else if (data.configured) {
+        out.textContent = '✗ Server returned an error. Check URL and API key.';
+        out.className = 'small warn-text';
+      } else {
+        out.textContent = '⚠ Could not reach the server.';
+        out.className = 'small warn-text';
+      }
+    } catch (e) {
+      out.textContent = '✗ ' + e;
+      out.className = 'small warn-text';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+{% endblock %}

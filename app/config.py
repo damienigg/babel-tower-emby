@@ -380,8 +380,54 @@ class SettingsStore:
                 )
             return {}
 
+        # Snapshot for the version-tag + write-back logic below. We
+        # serialize via sorted JSON so the comparison is insensitive to
+        # dict ordering (some migrations rebuild dicts via comprehensions).
+        before_serialized = json.dumps(data, sort_keys=True)
+
         for migration in _MIGRATIONS:
             data = migration(data)
+
+        # Persist the migration result so subsequent startups don't
+        # re-run them. Two signals trigger the write-back: (a) data
+        # actually changed, (b) the persisted schema_version is stale
+        # relative to the current build (catches the case where the
+        # migrations were no-ops but we still want to bump the tag).
+        from app import __version__
+        prior_version = data.pop("_schema_version", None)
+        # Always re-stamp with the current version so a downgrade leaves
+        # a clear trail of "this file was last touched by X".
+        data["_schema_version"] = __version__
+        after_serialized = json.dumps(data, sort_keys=True)
+        if before_serialized != after_serialized:
+            try:
+                self._file.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self._file.with_name(self._file.name + ".tmp")
+                tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+                os.replace(tmp, self._file)
+                if prior_version and prior_version != __version__:
+                    _log.info(
+                        "settings.json migrated from schema %s → %s",
+                        prior_version, __version__,
+                    )
+                elif prior_version is None:
+                    _log.info(
+                        "settings.json stamped with schema_version=%s "
+                        "(first run with the version-tag mechanism)",
+                        __version__,
+                    )
+            except OSError as e:
+                # Migration write-back is an optimization. If it fails,
+                # the next startup re-runs the migrations from scratch —
+                # not ideal but not catastrophic. Log and continue.
+                _log.warning(
+                    "settings.json migration write-back failed (%s); "
+                    "migrations will re-apply at next startup.", e,
+                )
+
+        # Don't return _schema_version to the rest of the app — it's a
+        # provenance tag, not a pydantic-model field.
+        data.pop("_schema_version", None)
         return data
 
     def _save_locked(self) -> None:
@@ -481,11 +527,27 @@ def _rename_emby_to_media_server(data: dict) -> dict:
     return data
 
 
+def _drop_unknown_keys(data: dict) -> dict:
+    """Remove keys that aren't in the current pydantic model — residue
+    from past renames where the old key wasn't explicitly popped, or
+    fields that were dropped between releases. Without this, a user's
+    settings.json accumulates dead keys forever; with it, the file
+    self-cleans on every upgrade.
+
+    The schema_version key is preserved so the version-tag mechanism
+    keeps working across this cleanup. Anything else not in the
+    current model is silently removed (it had no effect anyway —
+    pydantic ignores unknown fields)."""
+    known = set(_EnvSettings.model_fields.keys()) | {"_schema_version"}
+    return {k: v for k, v in data.items() if k in known}
+
+
 _MIGRATIONS: list[Callable[[dict], dict]] = [
     _rename_translation_provider_claude_to_llm,
     _split_unified_llm_into_per_function_slots,
     _drop_shared_anthropic_api_key,
     _rename_emby_to_media_server,
+    _drop_unknown_keys,
 ]
 
 

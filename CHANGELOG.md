@@ -7,6 +7,58 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.12] — 2026-05-12
+
+Distribution-readiness pass: onboarding wizard, settings migration
+hardening, README freshening.
+
+### Added
+
+- **Onboarding wizard** at `/onboarding`. First-run users (no
+  `media_server_url` configured) are auto-redirected here from the
+  Dashboard instead of facing the full 40+ field Settings form.
+  Three guided steps: pick server type + URL + API key (with a
+  "Test connection" button that uses `/api/server/health`), pick
+  default language / mode / translator, click "Save & open Library".
+  Power users can opt out with the "Skip wizard — I'll configure
+  manually" link in the wizard's header (adds `?skip_wizard=1` to
+  the dashboard URL to bypass the redirect).
+
+### Changed
+
+- **Settings migration framework** hardened. The four legacy
+  rename migrations (`claude → llm`, `llm_backend → translation_llm_*`,
+  shared `anthropic_api_key`, `emby_url → media_server_url`) were
+  previously re-run on every startup and the result was never
+  persisted. Now: (a) data is serialized before/after migration
+  and the on-disk file is rewritten only when the data actually
+  changed, (b) a `_schema_version` provenance tag is stamped with
+  the current app version on every migration write-back, (c) an
+  INFO log line records every schema-version advance so operators
+  see what happened at container start.
+- New cleanup migration `_drop_unknown_keys` removes residue from
+  past renames (or any other settings.json key that's not in the
+  current pydantic model). settings.json self-heals on upgrade.
+
+### Documentation
+
+- README freshened to reflect the post-0.6 work: new "What you
+  get" feature list section (Quality Score, Cache Explorer,
+  observability, migration framework), new "Quality
+  observability" section explaining how to read the stats and
+  why "completed ≠ correct".
+
+### Tests
+
+- 7 new tests in `tests/test_settings_migration.py` covering the
+  unknown-keys cleanup, the schema_version stamping on first run,
+  write-back after data-modifying migrations, no-writeback when
+  already current, the migration log line, and that legacy
+  rename migrations still apply.
+- 5 new smoke tests covering the dashboard redirect, the
+  `?skip_wizard=1` bypass, the rendered wizard page, and the
+  wizard POST → /library redirect with verified settings update.
+
 ## [0.7.11] — 2026-05-12
 
 The Inception fix: pad-zone snap recovery + region-packing density
