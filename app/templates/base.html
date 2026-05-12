@@ -233,6 +233,13 @@
     }
     .progress-label.muted {
       position: static;
+      /* Reset the flex centering inherited from .progress-label so the
+         non-running statuses (queued / succeeded / canceled / dash) sit
+         left-aligned in the cell like every other column, rather than
+         being centered across the 12rem .col-progress width. */
+      display: inline-block;
+      justify-content: flex-start;
+      padding: 0;
       color: var(--pico-muted-color);
       text-shadow: none;
     }

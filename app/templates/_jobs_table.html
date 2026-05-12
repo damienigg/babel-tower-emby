@@ -90,15 +90,25 @@
             {% endif %}
           </td>
           <td>
-            {# Translation pill shows the provider and (when applicable)
-               the specific model — nllb · distilled-1.3B, llm · claude-opus-4-7,
-               etc. DeepL has no per-model dimension. The model name is
-               truncated to the last segment after a slash so HuggingFace IDs
-               (facebook/nllb-200-distilled-1.3B) render cleanly. #}
-            {% set _tr_model = j.translation_model.rsplit('/', 1)[-1] if j.translation_model else '' %}
-            <span class="status-pill muted">
-              {{ j.provider }}{% if _tr_model %} · {{ _tr_model }}{% endif %}
-            </span>
+            {# Translation cell: TWO pills per provider when there's a
+               model dimension to show, matching the dashboard's
+               Translation card layout. The previous one-pill version
+               read "nllb · nllb-200-distilled-1.3B" (with the redundant
+               "nllb-200-" prefix on the model id) — splitting into a
+               family pill + a variant pill drops the duplication and
+               makes the variant readable on its own. #}
+            {% if j.provider == 'nllb' %}
+              {% set _variant = (j.translation_model or '') | replace('facebook/nllb-200-', '') %}
+              <span class="status-pill muted">NLLB-200</span>
+              {% if _variant %}<span class="status-pill muted">{{ _variant }}</span>{% endif %}
+            {% elif j.provider == 'llm' %}
+              {% set _llm_model = j.translation_model.rsplit('/', 1)[-1] if j.translation_model else '' %}
+              <span class="status-pill muted">llm</span>
+              {% if _llm_model %}<span class="status-pill muted">{{ _llm_model }}</span>{% endif %}
+            {% else %}
+              {# DeepL has no per-model dimension; render the provider alone. #}
+              <span class="status-pill muted">{{ j.provider }}</span>
+            {% endif %}
           </td>
           <td>
             {# Per-run quality pill, color-graded by letter (A green … F red).

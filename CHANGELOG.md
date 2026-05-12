@@ -7,6 +7,31 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.14] — 2026-05-12
+
+### Fixed
+
+- **Jobs table Progress column was visually centered** rather than
+  left-aligned like the other columns. `.progress-label.muted`
+  inherited `display: flex; justify-content: center` from the base
+  `.progress-label` rule (designed for the active-job overlay,
+  where centering across the 11rem progress bar is correct) and
+  the override didn't reset the layout — only the position. The
+  muted variant now resets to `display: inline-block` so the
+  "queued / succeeded / canceled" text starts at the left edge
+  of the cell.
+
+### Changed
+
+- **Translation pill split into two pills**, matching the
+  dashboard's Translation card. For NLLB, "nllb ·
+  nllb-200-distilled-1.3B" (the model id duplicated the "nllb"
+  family name and carried the noisy `facebook/nllb-200-` prefix)
+  now reads as two pills: `NLLB-200` + `distilled-1.3B`. LLM
+  provider gets the same two-pill split (`llm` + model name).
+  DeepL renders the provider alone since it has no per-model
+  dimension.
+
 ## [0.7.13] — 2026-05-12
 
 ### Fixed
