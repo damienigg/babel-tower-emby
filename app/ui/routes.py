@@ -903,6 +903,65 @@ def library(
     )
 
 
+def _find_legacy_pipeline_metrics(output_path: str | None) -> dict | None:
+    """Recover pipeline_metrics for a legacy Job (pre-0.7.13, before
+    ``Job.pipeline_metrics`` was a persisted field) by scanning the
+    VTT cache for a payload whose ``media_path`` plausibly matches
+    the job's output filename. Best-effort — None if nothing fits.
+
+    The .vtt filename produced by the runner is shaped as
+    ``<media_basename>.<lang>.<mode>.ai.vtt`` (see ``api/manage._vtt_path``).
+    We strip the four predictable trailing components to recover the
+    media basename, then compare it against the stem of each cached
+    payload's ``media_path``. First match wins."""
+    if not output_path:
+        return None
+    import json
+    from pathlib import Path
+    out_name = Path(output_path).name
+    # ``Inception.fr.audio.ai.vtt`` → ``Inception`` after stripping
+    # ``.vtt`` → ``.ai`` → ``.<mode>`` → ``.<lang>``. We don't enforce
+    # a known mode/lang set here because the search is just a
+    # heuristic best-effort; a wrong basename simply produces no
+    # match and the function falls back to None.
+    base = out_name
+    if base.endswith(".vtt"):
+        base = base[:-4]
+    if base.endswith(".ai"):
+        base = base[:-3]
+    for mode in (".audio", ".scene", ".cinematic"):
+        if base.endswith(mode):
+            base = base[: -len(mode)]
+            break
+    # ``.<lang>`` — at most 5 chars (e.g. ".fr", ".zh-CN"); we just
+    # peel one final ``.<word>`` segment off.
+    if "." in base:
+        base = base.rsplit(".", 1)[0]
+    if not base:
+        return None
+
+    cache_root = Path(settings.cache_dir)
+    if not cache_root.is_dir():
+        return None
+    for entry in cache_root.iterdir():
+        if not entry.is_file() or entry.suffix != ".json":
+            continue
+        if entry.name in {"settings.json", "jobs.json"}:
+            continue
+        try:
+            payload = json.loads(entry.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        media_path = payload.get("media_path") or ""
+        if base in Path(media_path).stem:
+            pm = payload.get("pipeline_metrics")
+            if isinstance(pm, dict):
+                return pm
+    return None
+
+
 @router.get("/jobs/{job_id}/stats", response_class=HTMLResponse)
 def job_stats_page(request: Request, job_id: str) -> HTMLResponse:
     """Per-job version of the stats page — renders the same template
@@ -933,17 +992,31 @@ def job_stats_page(request: Request, job_id: str) -> HTMLResponse:
         vtt_text = path.read_text(encoding="utf-8")
     except OSError as e:
         raise HTTPException(500, f"could not read output: {e}")
+
     # Pass through the job's stored pipeline_metrics so the score the
     # page renders is byte-identical to the score in the Jobs table's
     # Quality pill. Without this the page recomputes from the .vtt
     # alone, misses every VAD / packing / translation penalty, and
     # silently reports a higher score than the pill claimed.
+    #
+    # Fallback for legacy jobs (pre-0.7.13, before Job.pipeline_metrics
+    # was a field): search the VTT cache for a payload whose
+    # ``media_path`` matches this job's output. The .vtt name carries
+    # the media basename (``<basename>.<lang>.<mode>.ai.vtt``), so we
+    # peel off the predictable suffixes to recover the basename and
+    # match it against cached ``media_path`` stems. Linear scan over
+    # cache_dir/*.json — typically a handful of files, dwarfed by the
+    # template render cost.
+    pipeline_metrics = getattr(j, "pipeline_metrics", None)
+    if pipeline_metrics is None:
+        pipeline_metrics = _find_legacy_pipeline_metrics(j.output_path)
+
     record = stats_mod.compute_from_vtt(
         vtt_text,
         media_path=str(path),
         cache_key=f"job:{job_id}",
         mode=j.mode,
-        pipeline_metrics=getattr(j, "pipeline_metrics", None),
+        pipeline_metrics=pipeline_metrics,
     )
     return templates.TemplateResponse(
         request,

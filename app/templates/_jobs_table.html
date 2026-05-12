@@ -115,10 +115,15 @@
                Hidden until the runner finishes computing it — running and
                failed jobs render a muted dash. #}
             {% if j.quality_score is not none and j.quality_grade %}
-              <a href="/jobs/{{ j.id }}/stats"
-                 class="status-pill quality-pill quality-pill-{{ j.quality_grade }}"
+              {# Two pills inside a single anchor — score on the left,
+                 letter grade on the right, both color-graded the same
+                 (A green … F red). Splitting visually mirrors the
+                 STT / Translation columns where the family + variant
+                 each get their own pill, instead of glued with "·". #}
+              <a href="/jobs/{{ j.id }}/stats" class="quality-link"
                  title="Open the full quality breakdown for this run">
-                 {{ j.quality_score }} · {{ j.quality_grade }}
+                <span class="status-pill quality-pill quality-pill-{{ j.quality_grade }}">{{ j.quality_score }}</span>
+                <span class="status-pill quality-pill quality-pill-{{ j.quality_grade }}">{{ j.quality_grade }}</span>
               </a>
             {% else %}
               <span class="muted">—</span>

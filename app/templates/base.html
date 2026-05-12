@@ -84,7 +84,19 @@
     a.output-pill:hover { filter: brightness(1.12); }
     /* Quality grade pills (Jobs table). Same shape as status-pill but
        colored by letter so the dashboard reads like a row of grades at
-       a glance — A green, F red — without having to parse numbers. */
+       a glance — A green, F red — without having to parse numbers.
+       The pills used to be one anchor; 0.7.15 split them into a score
+       pill + grade pill wrapped in a shared .quality-link anchor for
+       the hover/click affordance. */
+    a.quality-link {
+      text-decoration: none; display: inline-block;
+      font-variant-numeric: tabular-nums; line-height: 1;
+    }
+    a.quality-link:hover { filter: brightness(1.12); }
+    a.quality-link .quality-pill { margin-right: 0.25rem; }
+    a.quality-link .quality-pill:last-child { margin-right: 0; }
+    /* Legacy single-pill anchor — kept so any external pages or
+       partial cache pulls don't lose styling. */
     a.quality-pill {
       text-decoration: none; font-variant-numeric: tabular-nums;
     }

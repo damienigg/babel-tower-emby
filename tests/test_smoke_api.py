@@ -476,6 +476,89 @@ def test_cache_stats_api_404_when_missing(client):
     assert r.status_code == 404
 
 
+def test_job_stats_page_recovers_pipeline_metrics_from_cache_for_legacy_job(
+    client, tmp_path, monkeypatch,
+):
+    """0.7.15 fallback: a Job persisted before 0.7.13 (when
+    ``Job.pipeline_metrics`` was introduced) lacks the in-job
+    metrics field but the VTT cache payload still has them.
+    The /jobs/{id}/stats route now walks cache_dir/*.json and
+    matches by media basename to recover the metrics — so the
+    page surfaces the same score as the pill displays."""
+    import json
+    from app import jobs as jobs_mod
+    from app.config import settings as runtime_settings
+    from app.jobs import Job
+
+    # Wire cache_dir to a tmp path so we control its contents.
+    if "cache_dir" in runtime_settings.__dict__:
+        monkeypatch.delattr(runtime_settings, "cache_dir", raising=False)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    monkeypatch.setattr(
+        runtime_settings, "_overrides",
+        {**runtime_settings._overrides, "cache_dir": str(cache_dir)},
+    )
+
+    # Write a cache payload as the runner would have written it.
+    payload = {
+        "vtt": (
+            "WEBVTT\n\n"
+            "NOTE Subtitle This auto-subs (en -> fr, mode=audio, "
+            "whisper=small, provider=nllb)\n\n"
+            "00:00:00.000 --> 00:00:02.000\nHi\n"
+        ),
+        "media_path": "/m/Inception.2010.mkv",
+        "mode": "audio",
+        "cue_count": 1,
+        "pipeline_metrics": {
+            "vad": None, "whisper": None, "translation": None,
+            "packing": {
+                "enabled": True, "windows_total": 10,
+                "windows_packed": 10, "windows_single_region": 0,
+                "avg_regions_per_window": 12.0,
+                "cue_drop_pad_zone_count": 700,
+                "cue_snap_pad_zone_count": 0,
+                "cue_keep_count": 900,
+            },
+        },
+    }
+    (cache_dir / "abc123def4567890.json").write_text(json.dumps(payload))
+
+    # The .vtt next to the media — name follows the runner's pattern.
+    vtt_path = tmp_path / "Inception.2010.fr.audio.ai.vtt"
+    vtt_path.write_text(payload["vtt"], encoding="utf-8")
+
+    # Legacy job — quality_score is set (so the pill renders), but
+    # pipeline_metrics field is None (pre-0.7.13 state).
+    job = Job(
+        id="legacyjob1",
+        item_id="i1",
+        item_name="Inception.2010.mkv",
+        target_lang="fr",
+        provider="nllb",
+        mode="audio",
+        status="succeeded",
+        output_path=str(vtt_path),
+        quality_score=82,
+        quality_grade="B",
+        pipeline_metrics=None,    # the legacy state
+    )
+    monkeypatch.setattr(jobs_mod, "_jobs", {job.id: job})
+    try:
+        r = client.get(f"/jobs/{job.id}/stats")
+        assert r.status_code == 200
+        body = r.text
+        # The pad-drop factor must appear, proving the cache lookup
+        # recovered pipeline_metrics and threaded them into the score.
+        assert "Region-packing unrecoverable drops" in body, (
+            "Legacy fallback failed: pipeline_metrics not recovered "
+            "from cache, page rendered without the pad-drop penalty"
+        )
+    finally:
+        jobs_mod._jobs.pop(job.id, None)
+
+
 def test_job_stats_page_uses_stored_pipeline_metrics(client, tmp_path, monkeypatch):
     """Regression for 0.7.13: /jobs/{id}/stats was recomputing the score
     from the .vtt alone, ignoring pipeline_metrics. That produced a

@@ -7,6 +7,39 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.15] — 2026-05-12
+
+### Fixed
+
+- **Job stats page score mismatch for legacy jobs.** 0.7.13
+  fixed the mismatch for NEW jobs by storing `pipeline_metrics`
+  on the Job, but jobs that ran in 0.7.8-0.7.12 had no such
+  field on disk — clicking their pill still showed a different
+  (inflated) score. New fallback in `/jobs/{id}/stats`: when
+  `j.pipeline_metrics is None`, walk `cache_dir/*.json` and
+  match by media basename derived from the job's
+  `output_path`. First match's payload wins; its
+  `pipeline_metrics` is threaded into `compute_from_vtt` exactly
+  like the in-job field would have been.
+
+### Changed
+
+- **Quality column split into two pills.** The runner's
+  "82 · B" pill is now two adjacent pills wrapped in a shared
+  anchor — score on the left, letter grade on the right, both
+  color-graded the same. Mirrors the STT / Translation columns'
+  family + variant layout. Single click target, same destination
+  (`/jobs/{id}/stats`).
+
+### Tests
+
+- New `test_job_stats_page_recovers_pipeline_metrics_from_cache_for_legacy_job`
+  builds a Job in the pre-0.7.13 shape (quality_score set,
+  pipeline_metrics None), drops a matching cache payload with
+  a pad-drop signal, and asserts the stats page surfaces the
+  "Region-packing unrecoverable drops" factor — proving the
+  cache lookup recovered the metrics.
+
 ## [0.7.14] — 2026-05-12
 
 ### Fixed
