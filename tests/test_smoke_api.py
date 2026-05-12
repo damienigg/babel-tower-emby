@@ -91,23 +91,24 @@ def test_running_job_elapsed_is_inside_progress_label(client):
         jobs._jobs.pop(fake.id, None)
 
 
-def test_settings_page_renders_with_cost_ladder(client):
-    """The HTML settings page must render without errors and surface the
-    cost-ladder hero + per-section descriptions that guide users from the
-    free default to more expensive tiers."""
+def test_settings_page_renders_with_cost_aware_labels(client):
+    """The HTML settings page must render and surface the cost/quality
+    trade-off where users actually make the choice — inline option
+    badges in the provider/mode dropdowns + the per-section
+    descriptions. The standalone "Cost ladder" hero card was removed
+    in 0.7.10 as duplicative noise."""
     r = client.get("/settings")
     assert r.status_code == 200
     body = r.text
-    # Hero block with the cost ladder
-    assert "Cost ladder" in body
-    assert "NLLB" in body and "DeepL" in body and "LLM" in body
-    # Per-section descriptions
+    # Per-section descriptions still carry the cost framing
     assert "ALWAYS FREE" in body                           # STT section
     assert "cost/complexity lever" in body                 # Defaults section
     # Cost-aware option labels rendered in the dropdowns
     assert "[FREE · LOCAL]" in body                        # nllb option
     assert "[FREE TIER 500k chars/mo · CLOUD beyond]" in body   # deepl option
     assert "[+0 LLM calls beyond translation]" in body     # audio mode option
+    # The standalone hero card is gone.
+    assert "hero-cost-ladder" not in body
 
 
 def test_settings_get_masks_sensitive(client):

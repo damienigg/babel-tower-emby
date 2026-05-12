@@ -7,6 +7,31 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.10] — 2026-05-12
+
+UI polish out of the feedback loop.
+
+### Changed
+
+- **Dashboard cards** now have asymmetric widths. The
+  Speech-to-Text card carries up to three pills (backend / model /
+  device) and used to wrap onto a second line — gets
+  `grid-column: span 2` so it gets twice the width of the
+  Media server card (which only has 2 short pills). On narrow
+  viewports (< 600 px) the span collapses back to 1 to avoid an
+  awkward solo full-width row.
+- **Settings — Cost ladder hero card removed**. The standalone
+  "Cost ladder — settings sorted from always free to configurable
+  cost" block at the top of `/settings` was duplicative noise for
+  power users: the same cost/quality framing already appears in
+  the per-section descriptions ("ALWAYS FREE", "Provider is the
+  main cost/quality lever") and in the dropdown badges
+  (`[FREE · LOCAL]`, `[FREE TIER 500k chars/mo · CLOUD beyond]`,
+  `[VARIES]`). New users get the guidance contextually where
+  they make the choice; returning users no longer scroll past a
+  wall of intro text every visit. The associated `.hero-cost-ladder`
+  CSS is dropped.
+
 ## [0.7.9] — 2026-05-12
 
 Three feedback-driven UI polish items.

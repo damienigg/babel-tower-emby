@@ -21,19 +21,6 @@
     </article>
   {% endif %}
 
-  <article class="hero-cost-ladder">
-    <header><strong>Cost ladder — settings sorted from "always free" to "configurable cost"</strong></header>
-    <p>Defaults are the cheapest, no-setup combination. Subtitles work out of the box without any API key. Climb the ladder as you want better quality.</p>
-    <ol>
-      <li><strong>NLLB&nbsp;+&nbsp;audio</strong> · totally free, local, ~30 well-supported languages, decent quality. <em>(default — works once you've set Emby URL + key)</em></li>
-      <li><strong>DeepL&nbsp;+&nbsp;audio</strong> · free 500k chars/month, then paid. Excellent on EU/Asian pairs.</li>
-      <li><strong>LLM&nbsp;+&nbsp;audio</strong> · free if you point at local Ollama / LM Studio. Paid if cloud (Anthropic / OpenAI / …). Best quality on any language pair.</li>
-      <li><strong>LLM&nbsp;+&nbsp;scene</strong> · adds ~20 vision-LLM calls per film for pronouns and gendered agreement. Free if your vision LLM is local.</li>
-      <li><strong>LLM&nbsp;+&nbsp;cinematic</strong> · adds one LLM call per cue with the frame attached. Most calls, most expensive. Free if both LLMs are local.</li>
-    </ol>
-    <p><small>Sections below are organized so you only fill in what your tier needs. Stay on NLLB&nbsp;+&nbsp;audio → ignore the Translation model and Vision model sections entirely.</small></p>
-  </article>
-
   <form method="post" action="/settings">
     {% for section, section_desc, section_show_if, fields in sections %}
     <section class="settings-section"

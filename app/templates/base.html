@@ -270,8 +270,22 @@
        viewport with comfortable spacing rather than stretching to absurd
        widths. */
     section > .grid {
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 0.65rem;
+    }
+    /* Per-card column-span modifiers used in the dashboard grid so the
+       cards' widths match the amount of content they carry, rather than
+       every card getting an equal slice. The Speech-to-Text card has up
+       to 3 pills (backend / model / device or compute_type) which used
+       to wrap onto a second line; spanning 2 columns gives it the room
+       to stay on one line. Media server has 2 short pills and doesn't
+       need any extra room — leaving it at span 1 makes it noticeably
+       narrower next to the wider STT card without any explicit shrink
+       declaration on its end. On narrow viewports the span collapses
+       so the card doesn't take an awkward solo full-width row. */
+    .stat-card.card-wide { grid-column: span 2; }
+    @media (max-width: 600px) {
+      .stat-card.card-wide { grid-column: span 1; }
     }
     .stat-card { padding: 0.65rem 0.85rem; margin: 0; }
     .stat-card header {
@@ -344,24 +358,6 @@
       color: var(--pico-muted-color); font-style: italic;
       line-height: 1.45; max-width: 70ch;
     }
-
-    /* Cost-ladder hero on the settings page */
-    .hero-cost-ladder {
-      background: linear-gradient(135deg, var(--bt-info-bg), var(--bt-active-bg));
-      color: var(--bt-info-fg);
-      border: none;
-      padding: 0.8rem 1.05rem;
-      border-radius: 0.45rem;
-      margin-bottom: 1.2rem;
-      font-size: 0.92em;
-    }
-    .hero-cost-ladder header { margin-bottom: 0.4rem; padding: 0; border: none; background: none; }
-    .hero-cost-ladder header strong { font-size: 1em; color: var(--bt-active-fg); }
-    .hero-cost-ladder p { margin: 0.3rem 0; }
-    .hero-cost-ladder ol { margin: 0.4rem 0 0.5rem; padding-left: 1.3rem; }
-    .hero-cost-ladder li { margin-bottom: 0.15rem; line-height: 1.45; }
-    .hero-cost-ladder em { color: var(--bt-active-fg); font-style: normal; }
-    .hero-cost-ladder small { color: var(--bt-info-fg); opacity: 0.85; font-size: 0.88em; }
 
     /* Hidden state for conditional fields */
     .field-hidden { display: none; }
