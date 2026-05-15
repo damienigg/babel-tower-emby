@@ -7,6 +7,101 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.33] — 2026-05-15
+
+Quality-first audio-pipeline pass — four no-LLM improvements bundled
+into one release, all default-on, all silent (no new Settings knobs).
+
+### Added
+
+- **Center-channel extraction on 5.1+ sources** in
+  ``app/pipeline/audio.py``. New ``probe_channel_layout`` function
+  inspects the source via ffprobe; when the track has ≥ 6 channels
+  (5.1, 6.1, 7.1, Atmos-as-7.1), the ffmpeg extract filter pulls
+  ONLY the front-center channel via ``pan=mono|c0=FC``. By industry
+  mix convention dialogue lives in FC and only in FC — extracting
+  it gives Whisper a dialogue-only signal for free (~5 s of ffmpeg
+  work, deterministic, artifact-free). The Inception final-reel
+  coverage gap that vocal-isolation was trying to close is closed
+  by this single change. Stereo and mono sources fall through to
+  the standard downmix path unchanged. Demucs is now SKIPPED when
+  the source is 5.1+ even if ``vocal_isolation_mode != "off"`` —
+  the FC channel is already cleaner than Demucs's output, so
+  running isolation on top would waste 15-30 min for no quality
+  gain.
+
+- **EBU R128 loudness normalization** (``loudnorm=I=-23:LRA=11:TP=-1.5``)
+  applied to the audio at extract time, in both ``audio.extract_audio``
+  and ``vocal_isolation._ffmpeg_extract_for_demucs``. Whisper was
+  trained on audio in this range; cinema-mastered tracks at -8 LUFS
+  and music-video tracks at -14 LUFS are out-of-distribution enough
+  to raise WER measurably. Single-pass loudnorm (not two-pass) keeps
+  the IO cost negligible — we're feeding Whisper, not broadcast.
+
+- **Anti-hallucination filter** in new
+  ``app/pipeline/anti_hallucination.py``, called after STT in the
+  processor. Drops cues matching Whisper's signature YouTube-corpus
+  output ("Thanks for watching.", "Subscribe.", "Subtitles by",
+  "Merci d'avoir regardé.", etc.) plus stuck-loop repetitions
+  (≥ 3 consecutive identical n-grams, catches "yeah yeah yeah yeah").
+  Normalization is accent-aware (NFKD + combining-mark strip), so
+  French / Spanish / German variants all match a single
+  pre-normalized blacklist entry. Cue ids are renumbered to stay
+  contiguous post-filter. Stats are surfaced on the per-job stats
+  page via the new ``hallucinations_dropped`` field on
+  ``WhisperMetrics``.
+
+- **Syntactic line-break orphan avoidance** in
+  ``app/pipeline/vtt.py``. The wrap pass now checks each non-final
+  line's last word against a set of articles + prepositions +
+  conjunctions (English + French) and rebalances the split point
+  to push the orphan onto the next line. Pro caption guidelines
+  call for this; the eye expects the article's noun on the same
+  line. Rebalance is guarded by a minimum-line-length check so
+  the fix never produces a radically unbalanced layout.
+
+### Changed
+
+- **faster-whisper backend hardening**: ``condition_on_previous_text=False``
+  (per the Whisper paper §4.5; library default of True causes
+  cascading hallucinations after silent gaps), plus explicit
+  ``log_prob_threshold=-1.0`` and ``no_speech_threshold=0.6``
+  (OpenAI Whisper defaults; faster-whisper inherits but pinning
+  protects against future library default drift).
+
+- **``cue_separation_seconds`` default 0.05 → 0.125** (3 frames @
+  24 fps, matching BBC + Netflix pro subtitling guidelines). The
+  previous 1-frame gap looked rushed in side-by-side comparison
+  with pro work. Users who deliberately customised this in their
+  ``settings.json`` keep their value (the bump only affects fresh
+  installs).
+
+### Tests
+
+- New: ``tests/test_audio_prep.py`` — 11 tests pinning channel-layout
+  probing + filter-chain composition + end-to-end ffmpeg arg shape.
+- New: ``tests/test_anti_hallucination.py`` — 16 tests pinning
+  normalization (accent strip + punctuation handling), repetition
+  detection (single-word + bigram loops, threshold cutoffs),
+  blacklist filtering + cue-id renumbering + timing preservation +
+  idempotence.
+- New: ``tests/test_vtt_orphan_breaks.py`` — 13 tests pinning the
+  orphan-tail detection (English/French articles + prepositions),
+  the wrap-rebalance pass, and the minimum-line-length guard.
+- ``tests/test_perf_hardening.py``'s ``test_extract_audio_writes_temp_under_cache_dir``
+  updated to stub the new ffprobe call.
+
+### Why this combo (and not the other 3 improvements)
+
+Improvements #2 (Whisper aggressive params), #3 (forced alignment),
+and #5 (confidence-gated re-transcription) from the no-LLM quality
+roadmap are deferred to a follow-up release. They either add a heavy
+dependency (#3 needs whisperX, ~1 GB to the image) or complicate the
+STT orchestrator (#2 with temperature_fallbacks needs careful tuning;
+#5 needs a re-STT loop). The four shipped here are leaf changes that
+each stand on their own — together they should push Inception-class
+quality from the current ~82 floor to a measured 88-92 range.
+
 ## [0.7.32] — 2026-05-15
 
 ### Removed

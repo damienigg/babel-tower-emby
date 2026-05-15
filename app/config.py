@@ -231,9 +231,12 @@ class _EnvSettings(BaseSettings):
     max_merged_cue_duration_seconds: float = Field(7.0, ge=1.0, le=15.0)
     # Minimum gap to keep between consecutive cues after polish, so
     # an extended cue's end doesn't bleed onto the next cue's start.
-    # 0.05 s ≈ 1 frame at 24 fps — invisible but enough for renderers
-    # that won't display two overlapping cues cleanly.
-    cue_separation_seconds: float = Field(0.05, ge=0.0, le=1.0)
+    # 0.125 s = 3 frames at 24 fps — the value pro subtitling
+    # guidelines (BBC, Netflix) call for. Pre-0.7.33 default was
+    # 0.05 s (1 frame), which technically works but renders as
+    # subtitles flashing one frame off — looks rushed in side-by-side
+    # comparison with pro work.
+    cue_separation_seconds: float = Field(0.125, ge=0.0, le=1.0)
 
     # Defaults applied when the user clicks "Subtitle this" on a row or
     # "Subtitle selected" on the multi-select batch in the web UI without

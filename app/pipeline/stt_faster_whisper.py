@@ -47,6 +47,29 @@ def transcribe(
         language=language_hint,
         vad_filter=True,
         beam_size=5,
+        # ``condition_on_previous_text=False`` is the recommended
+        # setting for long-form transcription per the Whisper paper
+        # (Section 4.5) and faster-whisper's own README: with it
+        # enabled (the library default), the model conditions each
+        # 30 s window on the previous window's TEXT — which causes
+        # cascading hallucinations after a silent gap (Whisper
+        # generates "Thank you. Thanks for watching." repeatedly,
+        # then conditions the next window on that, and the loop
+        # continues for minutes). On dialog-heavy films with score-
+        # bedded scenes, this is THE main source of nonsense cues.
+        # Disabling it costs a bit of cross-window context but
+        # eliminates the cascading-hallucination class entirely.
+        condition_on_previous_text=False,
+        # Filter out segments with very low average log-probability —
+        # those are the model's "I'm not sure but here's a guess"
+        # outputs, which on silence become exactly the signature
+        # YouTube-style hallucinations we want to drop. -1.0 is the
+        # OpenAI Whisper default; faster-whisper exposes it.
+        log_prob_threshold=-1.0,
+        # And drop segments where the no-speech probability is high —
+        # Whisper's own gate against transcribing silence as if it
+        # were speech. 0.6 is the OpenAI default.
+        no_speech_threshold=0.6,
     )
     # info.duration is the audio length in seconds (post-VAD when applicable).
     # Each yielded segment has .end (audio timestamp), so segment.end /

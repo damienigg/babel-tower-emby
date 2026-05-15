@@ -237,10 +237,26 @@ def process(
         progress(80, "translating (transcript cache hit)")
         check_cancel()
     else:
-        # Choose the audio prep path: vocals-only (Demucs) or raw track.
+        # Choose the audio prep path:
+        # - 5.1+ source: center-channel extraction in audio.extract_audio
+        #   gives us dialogue-only audio for free (~5 s of ffmpeg work).
+        #   Demucs would be redundant AND slower (~15-30 min), so we
+        #   skip it even when vocal_isolation_mode != "off". The user's
+        #   isolation toggle stays useful for stereo sources.
+        # - Stereo/mono source with vocal_isolation enabled: Demucs path.
+        # - Else: standard mono downmix.
         # Both yield the same shape — a 16 kHz mono WAV at a Path. STT
         # downstream doesn't care which one produced it.
-        if vocal_isolation_enabled:
+        channel_info = audio.probe_channel_layout(req.media_path, track.index)
+        use_demucs = vocal_isolation_enabled and not channel_info.has_center
+        if vocal_isolation_enabled and channel_info.has_center:
+            _log.info(
+                "audio prep: %d-channel source detected → skipping Demucs in "
+                "favour of center-channel extraction. The FC channel is "
+                "dialogue-only by mix convention, so isolation is redundant.",
+                channel_info.channels,
+            )
+        if use_demucs:
             from app.pipeline import vocal_isolation as vi
             audio_ctx = vi.isolate_vocals(
                 req.media_path, track.index,
@@ -272,7 +288,7 @@ def process(
             else:
                 wav_path = audio_handle
 
-            progress(8 if vocal_isolation_enabled else 3,
+            progress(8 if use_demucs else 3,
                      "detecting language" if needs_detection_pre_pass else "transcribing")
             check_cancel()
             language_hint = track.language
@@ -281,9 +297,9 @@ def process(
                 detected = lang_detect.detect(wav_path)
                 if detected:
                     language_hint = detected
-                progress(10 if vocal_isolation_enabled else 8, "transcribing")
+                progress(10 if use_demucs else 8, "transcribing")
                 check_cancel()
-            stt_base = 10 if vocal_isolation_enabled else 8
+            stt_base = 10 if use_demucs else 8
             stt_span = 80 - stt_base
             transcription = stt.transcribe(
                 wav_path,
@@ -291,6 +307,28 @@ def process(
                 progress=_scaled(progress, base=stt_base, span=stt_span, stage="transcribing"),
                 check_cancel=check_cancel,
             )
+
+        # Anti-hallucination pass on the raw STT cues. Drops the
+        # YouTube-corpus-tail signature phrases ("Thanks for watching.",
+        # "Subscribe.", etc.) that Whisper falls back to on silence,
+        # plus stuck-loop repetitions ("yeah yeah yeah yeah"). See
+        # anti_hallucination.py for the full list + rationale. Cue
+        # ids are renumbered to stay contiguous post-filter.
+        from app.pipeline import anti_hallucination
+        filtered_cues, ah_stats = anti_hallucination.filter_cues(transcription.cues)
+        transcription.cues = filtered_cues
+        if ah_stats.blacklisted or ah_stats.repetition_dropped:
+            from app import pipeline_metrics as pm_mod
+            if transcription.pipeline_metrics is None:
+                transcription.pipeline_metrics = pm_mod.PipelineMetrics()
+            # Stash on whisper metrics rather than introducing a whole
+            # new metrics block — it's a single small stat.
+            if transcription.pipeline_metrics.whisper is None:
+                transcription.pipeline_metrics.whisper = pm_mod.WhisperMetrics()
+            transcription.pipeline_metrics.whisper.hallucinations_dropped = (
+                ah_stats.blacklisted + ah_stats.repetition_dropped
+            )
+
         # Store BEFORE the translation phase begins. If translation crashes
         # mid-flight, the next retry hits this entry and skips the 30+ min
         # of Whisper. Empty-cue transcriptions are not stored (transcript_cache

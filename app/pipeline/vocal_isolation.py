@@ -184,6 +184,11 @@ def _ffmpeg_extract_for_demucs(media_path: str, track_index: int) -> Path:
     Demucs's pretrained models expect. Demucs *can* resample internally
     but doing it upfront via ffmpeg is faster and predictable.
 
+    Applies EBU R128 loudness normalization (-23 LUFS) at extract
+    time — Demucs is trained on normalized audio, and feeding it a
+    cinema-mastered track at -8 LUFS produces noticeably worse vocal
+    separation than feeding it the same track normalized.
+
     Lives under ``<cache_dir>/tmp/`` for the same reason audio.extract_audio
     does — keeps host /tmp clean and stays on the user's chosen volume."""
     tmp_dir = Path(settings.cache_dir) / "tmp"
@@ -200,6 +205,7 @@ def _ffmpeg_extract_for_demucs(media_path: str, track_index: int) -> Path:
             "-ac", "2",          # stereo (Demucs trained on stereo)
             "-ar", "44100",      # 44.1 kHz (Demucs's source rate)
             "-c:a", "pcm_s16le",
+            "-af", "loudnorm=I=-23:LRA=11:TP=-1.5",
             str(out),
         ],
         check=True,

@@ -41,9 +41,18 @@ def test_extract_audio_writes_temp_under_cache_dir(tmp_path, monkeypatch):
     captured_paths: list[str] = []
 
     def fake_run(args, **kwargs):
+        from unittest.mock import MagicMock
+        # 0.7.33 added an ffprobe channel-layout probe at the top of
+        # extract_audio. Stub it with a "stereo, no FC" response so
+        # we fall through to the standard downmix path. The ffmpeg
+        # invocation still happens after — that's what we capture.
+        if args and "ffprobe" in args[0]:
+            cp = MagicMock()
+            cp.stdout = '{"streams": [{"channels": 2, "channel_layout": "stereo"}]}'
+            cp.returncode = 0
+            return cp
         # The output wav path is the last positional argument to ffmpeg.
         captured_paths.append(args[-1])
-        from unittest.mock import MagicMock
         return MagicMock(returncode=0)
 
     with patch.object(audio_mod.subprocess, "run", side_effect=fake_run):

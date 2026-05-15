@@ -115,8 +115,15 @@ class PackingMetrics:
 class WhisperMetrics:
     """Counts what the decoder produced before downstream filters.
     Degenerate-timestamp drops are the well-known turbo-on-packed-
-    windows artefact — high counts here corroborate cause #3."""
+    windows artefact — high counts here corroborate cause #3.
+
+    ``hallucinations_dropped`` is the count of cues removed by the
+    0.7.33 anti-hallucination filter (blacklist hits + n-gram
+    repetition stuck-loops). Spikes signal that Whisper had a hard
+    time on this audio — typically: long silent stretches mistaken
+    for low-confidence speech."""
     cue_drop_degenerate_timestamp_count: int = 0
+    hallucinations_dropped: int = 0
 
 
 @dataclass
