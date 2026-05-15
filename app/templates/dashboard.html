@@ -128,6 +128,18 @@
     <article class="stat-card card-wide">
       <header>Pipeline tweaks</header>
       <div class="pill-row">
+        {# Embedded-subs short-circuit (0.10.0+). When ON, the pipeline
+           checks the source for text subtitle tracks BEFORE running STT.
+           Same-language tracks copied as-is; other-language text tracks
+           skip STT and go straight to translation. Massively improves
+           output quality and turnaround time on libraries with embedded
+           subs. Default ON. #}
+        {% if settings.prefer_embedded_subs %}
+          <span class="status-pill ok">embedded subs: on</span>
+        {% else %}
+          <span class="status-pill warn">embedded subs: off · STT always runs</span>
+        {% endif %}
+
         {# Vocal isolation — show the chosen mode + a small note that
            it auto-skips on 5.1+ sources. The footnote is the entire
            reason this got promoted onto the dashboard. #}
@@ -169,8 +181,10 @@
         {% endif %}
       </div>
       <p class="muted small" style="margin: 0.4rem 0 0;">
-        Vocal isolation auto-skips on 5.1+ sources — see the Cache Explorer
-        stats page on a finished job for the per-run audio-prep decision.
+        Embedded subs run when the source already carries text subtitle
+        tracks (PGS bitmap subs still go through STT). Vocal isolation
+        auto-skips on 5.1+ sources. See the Cache Explorer stats page on
+        a finished job for the full per-run decision trace.
       </p>
     </article>
 

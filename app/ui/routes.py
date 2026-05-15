@@ -282,6 +282,38 @@ _FIELD_META: list[dict[str, Any]] = [
                 "• < 60 — starts hurting separation quality near chunk boundaries"},
 
     # ── Speech-to-Text ────────────────────────────────────────────────────────
+    # 0.10.0+: short-circuit STT entirely when the source already carries
+    # text subtitle tracks. Lives at the top of the STT section because
+    # it gates whether the rest of the STT/translation stack even runs.
+    {"key": "prefer_embedded_subs", "section": "Speech-to-Text",
+     "label": "Use embedded subtitle tracks when present",
+     "type": "checkbox",
+     "default_value": True,
+     "summary": "Skip STT when the source file already carries a usable text subtitle track. Default ON.",
+     "details": "Many MKVs ship with one or more embedded subtitle tracks — often "
+                "professionally authored and sometimes already in your target language. "
+                "Running Whisper + NLLB on those is wasted compute AND wasted accuracy: "
+                "STT introduces timing drift, translation introduces lexical drift, "
+                "neither can match human-authored output.\n\n"
+                "When enabled, the pipeline checks for subtitle tracks BEFORE running "
+                "STT:\n\n"
+                "• **Target-language text track present** → the embedded track is copied "
+                "as-is. No STT, no translation, no polish — pro-grade output in seconds. "
+                "Score Reference ≈ 100 on a typical job.\n"
+                "• **Source-language (or English) text track present** → STT is skipped; "
+                "the embedded cues feed straight into the translation phase. Timing and "
+                "coverage are perfect; only translation quality is bounded by your "
+                "provider choice.\n"
+                "• **Only bitmap subs (PGS / DVD-bitmap, common on Bluray rips)** → "
+                "the pipeline falls back to STT. OCR support for bitmap tracks is a "
+                "future enhancement.\n"
+                "• **No subtitle tracks at all** → standard STT path runs unchanged.\n\n"
+                "The Cache Explorer stats page shows the decision for every finished "
+                "job (which track was chosen, which codec, which language) so you can "
+                "see exactly what happened.\n\n"
+                "Turn OFF if you specifically want a fresh STT pass even when subs are "
+                "embedded — useful when the embedded track is known to be low quality "
+                "(SDH-only, mis-translated, or out-of-sync with the rip you have)."},
     {"key": "whisper_backend", "section": "Speech-to-Text",
      "label": "Backend", "type": "select",
      "options": [

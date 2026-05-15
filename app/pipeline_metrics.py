@@ -304,6 +304,42 @@ def compute_translation_metrics(
 
 
 @dataclass
+class EmbeddedSubsMetrics:
+    """0.10.0+: captures the embedded-subtitle short-circuit decision.
+
+    The processor probes the source for subtitle streams before STT.
+    If a usable text track exists, the entire STT phase (and on a
+    same-lang track, the entire translation phase) is skipped. The
+    stats sidecar carries this record so the user can see WHY a film
+    that normally takes 30 min came back in 10 s — or, conversely,
+    why a Bluray rip still ran STT despite having subs (PGS bitmap,
+    no OCR yet).
+
+    - ``tracks_detected``: total subtitle streams in the file.
+    - ``text_tracks_count`` / ``bitmap_tracks_count``: split of those.
+    - ``chosen_track_index``: absolute ffprobe stream index of the
+      track we used, or None if STT path ran.
+    - ``chosen_codec`` / ``chosen_lang`` / ``chosen_title``: descriptive
+      fields for the UI label.
+    - ``action``: one of
+        - ``copy_same_lang``   target_lang track existed → copied as-is
+        - ``translate_other_lang`` non-target text track → translated
+        - ``fallback_no_text`` only bitmap tracks → STT path ran
+        - ``fallback_no_tracks`` no subtitle streams at all → STT path
+        - ``disabled_by_user`` prefer_embedded_subs=False → STT path
+        - ``fallback_extract_failed`` ffmpeg extraction crashed → STT
+    """
+    tracks_detected: int = 0
+    text_tracks_count: int = 0
+    bitmap_tracks_count: int = 0
+    chosen_track_index: int | None = None
+    chosen_codec: str | None = None
+    chosen_lang: str | None = None
+    chosen_title: str | None = None
+    action: str = "fallback_no_tracks"
+
+
+@dataclass
 class PipelineMetrics:
     """The full per-run telemetry record. Each sub-metric is optional
     so consumers downstream (stats sidecar, transcript cache replay)
@@ -317,6 +353,7 @@ class PipelineMetrics:
     anti_hallucination: AntiHallucinationMetrics | None = None
     polish: PolishMetrics | None = None
     translation: TranslationMetrics | None = None
+    embedded_subs: EmbeddedSubsMetrics | None = None
 
 
 # ── Aggregators (mutable; written to during a run, then finalized) ────────

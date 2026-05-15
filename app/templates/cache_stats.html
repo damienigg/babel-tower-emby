@@ -354,6 +354,82 @@
 {% if stats.pipeline_metrics %}
   {% set pm = stats.pipeline_metrics %}
 
+  {# Embedded-subs decision (0.10.0+) — surfaces WHICH path produced
+     the .vtt: STT or a short-circuit copy/translate from a text
+     subtitle track already in the source file. Shown FIRST because
+     the decision determines what the rest of the metrics mean: an
+     embedded-copy run has no audio prep, no Whisper, no
+     anti-hallucination — those sections will simply be absent. #}
+  {% if pm.embedded_subs %}
+    {% set es = pm.embedded_subs %}
+    <section>
+      <h2>Embedded subtitles <span class="muted small">(short-circuit decision — did the source already carry subs we could reuse?)</span></h2>
+      <table class="kv">
+        <tr><th>Subtitle tracks in source</th><td>
+          {{ es.tracks_detected }}
+          {% if es.text_tracks_count or es.bitmap_tracks_count %}
+            <span class="muted small">
+              ({{ es.text_tracks_count }} text,
+              {{ es.bitmap_tracks_count }} bitmap)
+            </span>
+          {% endif %}
+        </td></tr>
+        <tr><th>Decision</th><td>
+          {% if es.action == 'copy_same_lang' %}
+            <span class="status-pill ok">embedded copy</span>
+            <span class="muted small">
+              (track #{{ es.chosen_track_index }} —
+              <code>{{ es.chosen_codec }}</code>,
+              language {{ es.chosen_lang }}{% if es.chosen_title %} — “{{ es.chosen_title }}”{% endif %} —
+              was already in the target language. Copied as-is, zero STT,
+              zero translation. Professional-grade output at near-zero
+              cost — no Whisper drift, no NLLB rephrasing.)
+            </span>
+          {% elif es.action == 'translate_other_lang' %}
+            <span class="status-pill ok">embedded translate</span>
+            <span class="muted small">
+              (track #{{ es.chosen_track_index }} —
+              <code>{{ es.chosen_codec }}</code>,
+              language {{ es.chosen_lang or '—' }}{% if es.chosen_title %} — “{{ es.chosen_title }}”{% endif %} —
+              fed straight to the translator; STT skipped entirely.
+              Timing and coverage are perfect; only the translation
+              step ran.)
+            </span>
+          {% elif es.action == 'fallback_no_text' %}
+            <span class="status-pill muted">fallback to STT</span>
+            <span class="muted small">
+              ({{ es.bitmap_tracks_count }} bitmap subtitle track(s)
+              detected but no text track. PGS/DVD-bitmap subs would need
+              OCR to be readable — not yet supported. Ran the standard
+              audio → STT → translate path.)
+            </span>
+          {% elif es.action == 'fallback_no_tracks' %}
+            <span class="status-pill muted">no subtitles in source</span>
+            <span class="muted small">
+              (no subtitle tracks in the file at all — ran the standard
+              audio → STT → translate path.)
+            </span>
+          {% elif es.action == 'fallback_extract_failed' %}
+            <span class="status-pill warn">extraction failed</span>
+            <span class="warn-text small">
+              (found a usable text track but ffmpeg failed to extract
+              it — fell back to STT. This usually means a malformed
+              subtitle stream; the .vtt still came out fine.)
+            </span>
+          {% elif es.action == 'disabled_by_user' %}
+            <span class="status-pill muted">disabled in settings</span>
+            <span class="muted small">
+              (<code>prefer_embedded_subs</code> is off — pipeline
+              always runs STT regardless of what's embedded.)
+            </span>
+          {% else %}
+            <span class="status-pill muted">{{ es.action }}</span>
+          {% endif %}
+        </td></tr>
+      </table>
+    </section>
+  {% endif %}
+
   {# Audio prep section (channel routing + loudnorm) #}
   {% if pm.audio_prep %}
     {% set ap = pm.audio_prep %}

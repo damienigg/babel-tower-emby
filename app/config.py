@@ -253,6 +253,24 @@ class _EnvSettings(BaseSettings):
     # Either way the first call downloads the ~1.5 GB NLLB-200 model to
     # /cache/nllb-models. Users who want best quality flip this to `llm`.
     default_translation_provider: str = "nllb"
+    # 0.10.0+: when the source file already carries text-based subtitle
+    # tracks (srt/ass/mov_text/webvtt embedded in the MKV/MP4), use them
+    # instead of running STT + translation from audio. The short-circuit:
+    #
+    # - Target-language text track present → copied as-is (zero translation,
+    #   pro-authored quality, seconds instead of ~hour).
+    # - Source-language (or English) text track present → skip STT, feed
+    #   parsed cues directly into the translation phase. Timing and
+    #   coverage are perfect; only the translation step runs.
+    # - Only bitmap tracks (PGS/DVD-bitmap, typical on Bluray rips) →
+    #   fall back to STT. OCR is a future enhancement.
+    # - No subtitle tracks at all → fall back to STT.
+    #
+    # Default ON because the quality and speed wins are large and the
+    # behaviour matches a sensible user mental model ("if subs exist,
+    # use them"). The decision is recorded in pipeline_metrics.embedded_subs
+    # so the stats page explains what happened.
+    prefer_embedded_subs: bool = True
     # 0.9.2: default flipped from True to False. An explicit user click
     # on "Subtitle this" is a deliberate intent — silently skipping it
     # because a same-language audio track happens to exist in the file

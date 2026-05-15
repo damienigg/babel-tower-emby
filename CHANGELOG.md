@@ -7,6 +7,80 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-05-15
+
+Embedded-subtitle short-circuit. When the source media already carries
+text subtitle tracks (srt/ass/mov_text/webvtt embedded in the MKV/MP4),
+the pipeline now uses them instead of running STT — a major quality
+and turnaround win on libraries with embedded subs.
+
+### Added
+
+- **`prefer_embedded_subs` (default ON)** — new pipeline setting in
+  Settings → Speech-to-Text. Before running STT, the processor probes
+  the source for subtitle streams via ffprobe and short-circuits when
+  a usable text track exists:
+  - **Target-language text track present** → copied as-is, zero STT
+    and zero translation. Pro-grade output in seconds.
+  - **Source-language (or English) text track present** → STT skipped,
+    cues fed straight into the translator. Timing and coverage are
+    perfect; only the translation step runs.
+  - **Only bitmap (PGS/DVD-bitmap) tracks** → falls back to STT. OCR
+    for bitmap subs is a future enhancement.
+  - **No subtitle tracks at all** → standard STT path, unchanged.
+
+- **`app/pipeline/embedded_subs.py`** — new module:
+  - `list_subtitle_tracks(media_path)` via ffprobe
+  - `pick_best_track(tracks, target_lang, source_lang)` with the
+    priority **target_lang > source_lang > en > first text track**.
+    Forced-only tracks skipped; SDH tracks kept but ranked below
+    non-SDH within the same language.
+  - `extract_track(media_path, track)` via `ffmpeg -map 0:s:N -c:s
+    webvtt` — handles srt/ass/mov_text/etc. → VTT conversion natively.
+
+- **`EmbeddedSubsMetrics`** in `pipeline_metrics.py` — records the
+  decision (`copy_same_lang` / `translate_other_lang` / `fallback_*` /
+  `disabled_by_user`) plus the chosen track's codec, language, title,
+  and stream index.
+
+### Changed
+
+- **Cache Explorer stats page** — new "Embedded subtitles" section
+  at the top of the pipeline-telemetry block. Shows track count
+  (split text vs bitmap), the decision, and a one-paragraph
+  explanation of what happened.
+- **Dashboard "Pipeline tweaks" card** — adds an "embedded subs:
+  on/off" pill so the operator sees the global state at a glance.
+- **Cache key** — `prefer_embedded_subs` is now part of the cache
+  fingerprint. Pre-0.10.0 entries (keyed without the flag) match
+  callers that pass `False`, so existing libraries keep their
+  cache hits when the new feature is opted out.
+- **NOTE header in generated .vtt** — when embedded subs produced
+  the file, the header records `source=embedded-<codec>, track #N`
+  instead of `whisper=<model>`. Viewer can tell which path produced
+  the file at a glance.
+
+### Provenance trace
+
+On a finished job, the .stats.json sidecar's `pipeline_metrics`
+block now includes `embedded_subs` with the full decision trace.
+The stats page renders this with the specific action that was
+taken and why.
+
+### Tests
+
+- `tests/test_embedded_subs.py` — 18 new tests:
+  - ffprobe JSON → SubtitleTrack parsing (3-letter ISO normalization,
+    bitmap vs text codec families, missing-tag tolerance)
+  - `pick_best_track` priority cases (target > source > en > first,
+    forced/SDH/default-disposition handling)
+  - End-to-end processor integration: copy mode skips STT +
+    translation + audio extract; translate mode skips STT + audio
+    extract but runs translation on the extracted cues
+  - Metrics serialization via `to_jsonable`
+
+Total test count: 530 passing (was 525).
+
 ## [0.9.2] — 2026-05-15
 
 UX cleanup of the Settings → Defaults section. The three fields it
