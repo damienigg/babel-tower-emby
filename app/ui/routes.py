@@ -7,7 +7,7 @@ import types
 import typing
 from typing import Any, get_args, get_origin, get_type_hints
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -807,14 +807,35 @@ def jobs_partial(request: Request) -> HTMLResponse:
 @router.get("/library", response_class=HTMLResponse)
 def library(
     request: Request,
+    # 0.11.0+: ``target_langs`` is a repeated query param (e.g.
+    # ?target_langs=fr&target_langs=en) so the Library form's
+    # multi-language chip row can submit multiple selections in one
+    # request. ``target_lang`` (singular) stays accepted for backwards
+    # compatibility with bookmarks + the old single-select URL shape —
+    # if both are present, target_langs wins.
+    target_langs: list[str] | None = Query(default=None),
     target_lang: str | None = None,
     q: str | None = None,
-    missing_only: int = 0,
     start_index: int = 0,
     limit: int = 50,
     library_id: str | None = None,
 ) -> HTMLResponse:
     """Browse media-server items, filter, and queue per-item subtitling jobs."""
+    # Resolve the effective target-lang list. Empty multi-selection falls
+    # back to the legacy singular param, then to the configured default.
+    if target_langs:
+        selected_langs = [lang for lang in target_langs if lang]
+    elif target_lang:
+        selected_langs = [target_lang]
+    else:
+        selected_langs = [settings.default_target_lang]
+    # Dedup while preserving order — the form uses checkboxes so dupes
+    # shouldn't happen, but URL hacking is cheap to defend against.
+    seen = set()
+    selected_langs = [
+        x for x in selected_langs if not (x in seen or seen.add(x))
+    ]
+
     if not settings.media_server_url or not settings.media_server_api_key:
         return templates.TemplateResponse(
             request, "library.html",
@@ -822,9 +843,8 @@ def library(
                 "active": "library",
                 "configured": False,
                 "items": [], "total": 0,
-                "target_lang": target_lang or settings.default_target_lang,
+                "selected_langs": selected_langs,
                 "q": q or "",
-                "missing_only": bool(missing_only),
                 "start_index": 0, "limit": limit,
                 "language_options": LANGUAGE_OPTIONS,
                 "libraries": [],
@@ -832,8 +852,6 @@ def library(
                 "error": None,
             },
         )
-
-    target_lang = target_lang or settings.default_target_lang
 
     error = None
     items: list[dict] = []
@@ -856,12 +874,25 @@ def library(
                 library_id=library_id or None,
             )
             for it in page.items:
-                has_sub = it.has_subtitle_track(target_lang)
-                if missing_only and has_sub:
-                    continue
+                # 0.11.0+: collect every subtitle-stream language present
+                # in the file. Replaces the per-target yes/missing pill
+                # with an at-a-glance view of what's already there.
+                # Language codes are already normalized to ISO 639-1 by
+                # the server-client adapter.
+                sub_langs = []
+                seen_lang: set[str] = set()
+                for s in it.streams:
+                    if s.type != "subtitle":
+                        continue
+                    lang = (s.language or "").lower()
+                    if not lang or lang in seen_lang:
+                        continue
+                    seen_lang.add(lang)
+                    sub_langs.append(lang)
                 items.append({
                     "id": it.id, "name": it.name, "type": it.type,
-                    "path": it.path, "has_target_subtitle": has_sub,
+                    "path": it.path,
+                    "subtitle_langs": sub_langs,
                 })
             total = page.total
         except (MediaServerError, HTTPException) as e:
@@ -874,9 +905,8 @@ def library(
             "configured": True,
             "items": items,
             "total": total,
-            "target_lang": target_lang,
+            "selected_langs": selected_langs,
             "q": q or "",
-            "missing_only": bool(missing_only),
             "start_index": start_index,
             "limit": limit,
             "language_options": LANGUAGE_OPTIONS,

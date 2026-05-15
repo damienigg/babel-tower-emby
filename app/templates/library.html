@@ -16,7 +16,7 @@
     </article>
   {% else %}
 
-  <form method="get" action="/library" style="margin-bottom: 1rem;">
+  <form method="get" action="/library" id="library-filter-form" style="margin-bottom: 1rem;">
     <div class="grid">
       <label>
         Library
@@ -33,21 +33,22 @@
         Search by name
         <input type="text" name="q" value="{{ q }}" placeholder="e.g. Casablanca">
       </label>
-      <label>
-        Target language
-        <select name="target_lang">
-          {% for code, display_name in language_options %}
-            <option value="{{ code }}" {% if target_lang == code %}selected{% endif %}>{{ display_name }} ({{ code }})</option>
-          {% endfor %}
-        </select>
-      </label>
     </div>
-    <label class="inline-checkbox">
-      <input type="checkbox" name="missing_only" value="1" {% if missing_only %}checked{% endif %}>
-      <span>Only show items missing a <strong>{{ target_lang }}</strong> subtitle</span>
-    </label>
+    <div style="margin-top: 0.5rem;">
+      <strong style="font-size: 0.9em;">Target languages</strong>
+      <span class="muted small" style="margin-left: 0.4rem;">— pick one or more (each click on “Subtitle now” / “Process batch” queues one job per language)</span>
+      <div class="lang-chip-row" id="target-langs-chips">
+        {% for code, display_name in language_options %}
+          <label class="lang-chip" title="{{ display_name }}">
+            <input type="checkbox" name="target_langs" value="{{ code }}"
+                   {% if code in selected_langs %}checked{% endif %}>
+            <span>{{ code }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </div>
     <input type="hidden" name="limit" value="{{ limit }}">
-    <button type="submit">Apply filters</button>
+    <button type="submit" style="margin-top: 0.4rem;">Apply filters</button>
   </form>
 
   <p>
@@ -68,7 +69,7 @@
         <tr>
           <th class="col-name">Name</th>
           <th class="col-type">Type</th>
-          <th class="col-sub">{{ target_lang }} sub?</th>
+          <th class="col-sub">Embedded subs</th>
           <th class="col-path">Path</th>
           <th class="col-action"></th>
           <th class="col-result"></th>
@@ -80,26 +81,30 @@
           <td class="col-name" title="{{ item.name }}">{{ item.name }}</td>
           <td class="col-type">{{ item.type }}</td>
           <td class="col-sub">
-            {% if item.has_target_subtitle %}
-              <span class="status-pill ok">yes</span>
+            {# 0.11.0+: list every subtitle language already present in
+               the source file. The embedded-subs short-circuit will
+               prefer these when target_lang matches one of them
+               (see Cache Explorer stats for the per-run decision). #}
+            {% if item.subtitle_langs %}
+              {% for sl in item.subtitle_langs %}
+                <span class="status-pill muted">{{ sl }}</span>{% if not loop.last %} {% endif %}
+              {% endfor %}
             {% else %}
-              <span class="status-pill warn">missing</span>
+              <span class="muted small">—</span>
             {% endif %}
           </td>
           <td class="col-path"><code class="path" title="{{ item.path }}">{{ item.path }}</code></td>
           <td class="col-action">
             <div class="row-actions">
               <button type="button" class="secondary subtitle-btn"
-                      hx-post="/api/process/{{ item.id }}?target_lang={{ target_lang }}"
-                      hx-swap="none"
-                      hx-on::after-request="showJobResult('row-result-{{ item.id }}', event.detail.xhr, event.detail.successful)"
-                      title="Queue this item now with the target language from the filter form above">
+                      data-item-id="{{ item.id }}"
+                      title="Queue this item now — one job per selected target language">
                 ▶ Subtitle now
               </button>
               <button type="button" class="secondary outline add-to-batch-btn"
                       data-item-id="{{ item.id }}"
                       data-item-name="{{ item.name }}"
-                      title="Add this item to the batch (target lang editable per-item below)">
+                      title="Add this item to the batch (target languages editable per-item below)">
                 + Batch
               </button>
             </div>
@@ -110,7 +115,11 @@
       </tbody>
     </table>
 
-    {% set base_qs = "?q=" ~ q ~ "&target_lang=" ~ target_lang ~ "&missing_only=" ~ ('1' if missing_only else '0') ~ "&limit=" ~ limit ~ ("&library_id=" ~ library_id if library_id else "") %}
+    {# Pagination URL: include each selected language as a repeated
+       target_langs= param so the filter survives a Previous/Next click. #}
+    {% set lang_qs = "" %}
+    {% for code in selected_langs %}{% set lang_qs = lang_qs ~ "&target_langs=" ~ code %}{% endfor %}
+    {% set base_qs = "?q=" ~ q ~ lang_qs ~ "&limit=" ~ limit ~ ("&library_id=" ~ library_id if library_id else "") %}
     <div style="margin: 1rem 0; display: flex; gap: 1rem; align-items: center;">
       {% if start_index > 0 %}
         <a href="{{ base_qs }}&start_index={{ start_index - limit if start_index >= limit else 0 }}">← Previous</a>
@@ -129,8 +138,9 @@
   {% endif %}
 
   {# Sticky batch panel at the bottom — visible only when the batch has items.
-     Renders fully from localStorage; supports per-item target_lang editing,
-     row removal, batch-wide processing, live per-row progress, batch-wide
+     Renders fully from localStorage; supports per-item multi-target_lang
+     editing (chip row), row removal, batch-wide processing, live per-row
+     progress (across the cross product of items × langs), batch-wide
      cancel, and a clear-all action. #}
   <div id="batch-panel" class="batch-panel" hidden>
     <div class="batch-summary">
@@ -150,7 +160,7 @@
       <thead>
         <tr>
           <th class="col-name">Item</th>
-          <th class="col-target-lang">Target lang</th>
+          <th class="col-target-lang">Target languages</th>
           <th class="col-status"></th>
           <th class="col-remove"></th>
         </tr>
@@ -167,24 +177,29 @@
           {"code": {{ code|tojson }}, "name": {{ name|tojson }}}{% if not loop.last %},{% endif %}
         {% endfor %}
       ],
-      "default_target_lang": {{ target_lang|tojson }}
+      "default_target_langs": {{ selected_langs|tojson }}
     }
   </script>
 
   <script>
     /*
-     * Batch flow with per-item target_lang editing.
+     * Batch flow with per-item MULTI target_langs editing (0.11.0+).
      *
      * Each row's "+ Batch" button captures the item id+name AND the
-     * filter form's CURRENT target_lang at click time, then appends
-     * to localStorage. The batch panel at the bottom renders from
-     * localStorage on every change. Each batched row has its own
-     * editable target_lang dropdown so the user can override per
+     * filter form's currently checked target_langs at click time,
+     * then appends to localStorage. The batch panel at the bottom
+     * renders from localStorage on every change. Each batched row
+     * has its own editable chip row so the user can override per
      * item before processing.
      *
-     * "Process batch" iterates the batch and POSTs /api/process/{id}
-     * once per item with that item's specific target_lang in the
-     * query string. Results are accumulated and shown in the panel.
+     * "Process batch" iterates the cross product of items × langs
+     * and POSTs /api/process/{id}?target_lang=<lang> once per (item,
+     * lang) pair. Results are accumulated per-row and shown in the
+     * panel; the aggregate progress bar averages across all queued
+     * (item, lang) jobs.
+     *
+     * "Subtitle now" on a row reads the filter form's currently
+     * checked target_langs and fires one POST per language.
      */
     (function () {
       const STORAGE_KEY = 'subtitleThis.batch';
@@ -235,15 +250,40 @@
       }
       let batch = loadBatch();
 
-      // Migration: older versions stored an object {id: name}. Convert to
-      // the new array shape if we detect that legacy format.
+      // Migration A (legacy 0.7.x): object {id: name} → array of entries.
       if (!Array.isArray(batch)) {
         batch = Object.entries(batch).map(([id, name]) => ({
           id, name,
-          target_lang: data.default_target_lang,
+          target_langs: (data.default_target_langs || []).slice(),
         }));
         saveBatch(batch);
       }
+      // Migration B (0.10.x → 0.11.0): single `target_lang` per entry →
+      // array `target_langs`. Each existing entry keeps its previously-
+      // chosen language, just promoted to a single-element list. The
+      // user can add more from the chip row in the panel without losing
+      // their queued items.
+      let migratedB = false;
+      for (const entry of batch) {
+        if (!Array.isArray(entry.target_langs)) {
+          entry.target_langs = entry.target_lang
+            ? [entry.target_lang]
+            : (data.default_target_langs || []).slice();
+          delete entry.target_lang;
+          migratedB = true;
+        }
+        // Per-lang job ids: a single batched entry may queue N jobs
+        // (one per target lang). job_ids is keyed by lang code.
+        // Old shape `job_id` (single str) maps to the first lang.
+        if (!entry.job_ids && entry.job_id) {
+          entry.job_ids = {};
+          entry.job_ids[entry.target_langs[0] || ''] = entry.job_id;
+          delete entry.job_id;
+          migratedB = true;
+        }
+        if (!entry.job_ids) entry.job_ids = {};
+      }
+      if (migratedB) saveBatch(batch);
 
       // ── Per-job state cache (job_id → JobView) refreshed by the poller ───
       // Not persisted: lives only for the lifetime of the page. Used to
@@ -252,12 +292,25 @@
       let jobsById = {};
 
       // ── Render ────────────────────────────────────────────────────────────
-      function buildOption(value, label, selectedValue) {
-        const opt = document.createElement('option');
-        opt.value = value;
-        opt.textContent = label;
-        if (value === selectedValue) opt.selected = true;
-        return opt;
+      function buildChipRow(selectedLangs, onChange) {
+        const row = document.createElement('div');
+        row.className = 'lang-chip-row';
+        for (const lang of data.languages) {
+          const label = document.createElement('label');
+          label.className = 'lang-chip';
+          label.title = lang.name;
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.value = lang.code;
+          input.checked = selectedLangs.includes(lang.code);
+          input.addEventListener('change', () => onChange(input.value, input.checked));
+          const span = document.createElement('span');
+          span.textContent = lang.code;
+          label.appendChild(input);
+          label.appendChild(span);
+          row.appendChild(label);
+        }
+        return row;
       }
 
       function renderBatch() {
@@ -286,17 +339,18 @@
 
           const tdLang = document.createElement('td');
           tdLang.className = 'col-target-lang';
-          const langSel = document.createElement('select');
-          for (const lang of data.languages) {
-            langSel.appendChild(
-              buildOption(lang.code, lang.name + ' (' + lang.code + ')', entry.target_lang)
-            );
-          }
-          langSel.addEventListener('change', () => {
-            batch[idx].target_lang = langSel.value;
-            saveBatch(batch);
-          });
-          tdLang.appendChild(langSel);
+          tdLang.appendChild(buildChipRow(
+            entry.target_langs,
+            (langCode, checked) => {
+              const list = batch[idx].target_langs;
+              if (checked && !list.includes(langCode)) list.push(langCode);
+              if (!checked) {
+                const pos = list.indexOf(langCode);
+                if (pos >= 0) list.splice(pos, 1);
+              }
+              saveBatch(batch);
+            },
+          ));
           tr.appendChild(tdLang);
 
           const tdStatus = document.createElement('td');
@@ -310,16 +364,21 @@
           removeBtn.type = 'button';
           removeBtn.className = 'secondary outline';
           removeBtn.textContent = '×';
-          removeBtn.title = 'Remove from batch (cancels job if still running)';
+          removeBtn.title = 'Remove from batch (cancels any running jobs)';
           removeBtn.addEventListener('click', async () => {
-            // If this entry has a running/queued job, cancel it before
-            // dropping from the panel — otherwise the job keeps running
-            // invisibly and the user has no way to stop it.
-            const job = entry.job_id ? jobsById[entry.job_id] : null;
-            if (job && ACTIVE_STATES.has(job.status)) {
-              try {
-                await fetch('/api/jobs/' + encodeURIComponent(entry.job_id) + '/cancel', { method: 'POST' });
-              } catch (e) { /* best effort — drop from batch either way */ }
+            // If any of this entry's per-lang jobs is still running,
+            // cancel them all before dropping from the panel — otherwise
+            // they keep running invisibly with no way for the user to
+            // stop them.
+            const activeIds = Object.values(entry.job_ids || {}).filter(jid => {
+              const j = jobsById[jid];
+              return j && ACTIVE_STATES.has(j.status);
+            });
+            if (activeIds.length > 0) {
+              await Promise.all(activeIds.map(jid =>
+                fetch('/api/jobs/' + encodeURIComponent(jid) + '/cancel', { method: 'POST' })
+                  .catch(() => {})
+              ));
             }
             batch.splice(idx, 1);
             saveBatch(batch);
@@ -339,6 +398,41 @@
       // Reads jobsById (populated by pollJobs) and updates each row's status
       // cell + the aggregate batch progress bar. Called after every poll and
       // after any state-changing action.
+      // Stringify ONE job's status into the small pill / progress widget
+      // we paint into the per-(item, lang) sub-cell. Pure function.
+      function jobMicroHtml(lang, job) {
+        if (!job) {
+          return '<span class="status-pill muted">' + lang + ': …</span>';
+        }
+        if (job.status === 'running' || job.status === 'canceling') {
+          const pct = Math.round(job.progress_pct || 0);
+          const snapMs = Math.round((job.snapshot_at || 0) * 1000);
+          const elapsedBase = job.elapsed_seconds || 0;
+          return '<span class="status-pill running" title="' +
+            (job.progress_stage || '') + '">' + lang + ' · ' + pct + '% · ' +
+            '<span class="elapsed-time" data-elapsed-base="' + elapsedBase +
+              '" data-snapshot-at-ms="' + snapMs + '">' +
+              formatElapsed(elapsedBase) +
+            '</span></span>';
+        }
+        if (job.status === 'succeeded') {
+          const elapsedTxt = formatElapsed(job.elapsed_seconds || 0);
+          return '<span class="status-pill ok">' + lang + ': done' +
+            (elapsedTxt ? ' · ' + elapsedTxt : '') + '</span>';
+        }
+        if (job.status === 'queued') {
+          return '<span class="status-pill queued">' + lang + ': queued</span>';
+        }
+        if (job.status === 'failed') {
+          return '<span class="status-pill err">' + lang + ': ' +
+            ((job.error || 'failed').slice(0, 30)) + '</span>';
+        }
+        if (job.status === 'canceled') {
+          return '<span class="status-pill canceled">' + lang + ': canceled</span>';
+        }
+        return '<span class="status-pill muted">' + lang + ': ' + job.status + '</span>';
+      }
+
       function paintLiveState() {
         let anyActive = false;
         let progSum = 0;
@@ -346,67 +440,37 @@
         for (const entry of batch) {
           const cell = document.getElementById('batch-row-status-' + entry.id);
           if (!cell) continue;
-          const job = entry.job_id ? jobsById[entry.job_id] : null;
-          if (!job) {
-            // Pre-process or job evicted from the in-memory cap.
-            cell.innerHTML = entry.job_id
-              ? '<span class="status-pill muted">…</span>'
-              : '';
+          const jobIds = entry.job_ids || {};
+          if (Object.keys(jobIds).length === 0) {
+            // Pre-process (no jobs submitted yet) — leave cell empty.
+            cell.innerHTML = '';
             continue;
           }
-          if (ACTIVE_STATES.has(job.status)) anyActive = true;
-          if (job.status === 'running' || job.status === 'canceling') {
-            const pct = Math.round(job.progress_pct || 0);
-            // The .elapsed-time span sits INSIDE the .progress-label so the
-            // user reads percent + elapsed as one unit overlaid on the bar.
-            // data-* attrs feed the global ticker in base.html which
-            // updates only the inner element's textContent — the
-            // surrounding "· 65%" stays put while seconds count up.
-            // snapshot_at is in seconds → convert to ms for the ticker.
-            const snapMs = Math.round((job.snapshot_at || 0) * 1000);
-            const elapsedBase = job.elapsed_seconds || 0;
-            cell.innerHTML =
-              '<div class="progress-wrap" style="width:8rem" title="' +
-                (job.progress_stage || '') + '">' +
-                '<div class="progress-bar" style="width:' + pct + '%"></div>' +
-                '<span class="progress-label">' +
-                  '<span class="elapsed-time" data-elapsed-base="' + elapsedBase +
-                    '" data-snapshot-at-ms="' + snapMs + '">' +
-                    formatElapsed(elapsedBase) +
-                  '</span>' +
-                  ' · ' + pct + '%' +
-                '</span>' +
-              '</div>';
-            progSum += (job.progress_pct || 0);
-            progCount++;
-          } else if (job.status === 'succeeded') {
-            const elapsedTxt = formatElapsed(job.elapsed_seconds || 0);
-            cell.innerHTML = '<span class="status-pill ok">done' +
-              (elapsedTxt ? ' · ' + elapsedTxt : '') + '</span>';
-            progSum += 100;
-            progCount++;
-          } else if (job.status === 'queued') {
-            cell.innerHTML = '<span class="status-pill queued">queued</span>';
-            progSum += 0;
-            progCount++;
-          } else if (job.status === 'failed') {
-            cell.innerHTML = '<span class="status-pill err">' +
-              ((job.error || 'failed').slice(0, 40)) + '</span>';
-            progCount++;
-          } else if (job.status === 'canceled') {
-            const elapsedTxt = formatElapsed(job.elapsed_seconds || 0);
-            cell.innerHTML = '<span class="status-pill canceled">canceled' +
-              (elapsedTxt ? ' · after ' + elapsedTxt : '') + '</span>';
-            progCount++;
-          } else {
-            cell.innerHTML = '<span class="status-pill muted">' + job.status + '</span>';
+          // Render one micro-pill per (lang, job_id) so the user sees
+          // every language's status side-by-side for the row.
+          const pieces = [];
+          for (const lang of entry.target_langs) {
+            const jid = jobIds[lang];
+            const job = jid ? jobsById[jid] : null;
+            if (job && ACTIVE_STATES.has(job.status)) anyActive = true;
+            if (job) {
+              if (job.status === 'succeeded') { progSum += 100; progCount++; }
+              else if (job.status === 'failed' || job.status === 'canceled') { progCount++; }
+              else { progSum += (job.progress_pct || 0); progCount++; }
+            }
+            pieces.push(jobMicroHtml(lang, job));
           }
+          cell.innerHTML = '<div class="pill-row" style="gap:0.25rem">' +
+            pieces.join('') + '</div>';
         }
-        // Show the aggregate bar when any entry has been queued — even if
-        // already done — so the user sees the batch finish at 100% rather
-        // than the bar disappearing the instant the last job lands.
-        const knownEntries = batch.filter(e => e.job_id).length;
-        if (knownEntries > 0) {
+        // Show the aggregate bar when any entry has any queued (item,lang)
+        // job — even if already done — so the user sees the batch finish
+        // at 100% rather than the bar disappearing the instant the last
+        // job lands.
+        const knownEntries = batch.some(e =>
+          Object.keys(e.job_ids || {}).length > 0
+        );
+        if (knownEntries) {
           batchProgressWrap.hidden = false;
           const pct = progCount > 0 ? Math.round(progSum / progCount) : 0;
           batchProgressBar.style.width = pct + '%';
@@ -414,7 +478,8 @@
         } else {
           batchProgressWrap.hidden = true;
         }
-        // Cancel batch is live whenever at least one job is still working.
+        // Cancel batch is live whenever at least one (item, lang) job is
+        // still working.
         cancelBatchBtn.hidden = !anyActive;
       }
 
@@ -432,11 +497,13 @@
           for (const j of list) jobsById[j.id] = j;
         } catch (e) { /* network blip — try again next tick */ }
         paintLiveState();
-        // Keep polling while any batch entry's job is still working.
-        const stillActive = batch.some(e => {
-          const j = e.job_id ? jobsById[e.job_id] : null;
-          return j && ACTIVE_STATES.has(j.status);
-        });
+        // Keep polling while any (item, lang) job is still working.
+        const stillActive = batch.some(e =>
+          Object.values(e.job_ids || {}).some(jid => {
+            const j = jobsById[jid];
+            return j && ACTIVE_STATES.has(j.status);
+          })
+        );
         if (!stillActive) {
           if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
         }
@@ -447,38 +514,87 @@
         pollHandle = setInterval(pollJobs, 2500);
       }
 
-      // ── "+ Batch" buttons on each row ─────────────────────────────────────
-      // Captures the current filter form's target_lang at click time.
-      const filterForm = document.querySelector('form[action="/library"]');
-      function captureFilterDefaults() {
-        if (!filterForm) {
-          return { target_lang: data.default_target_lang };
-        }
-        return {
-          target_lang: filterForm.elements.target_lang.value,
-        };
+      // ── Filter form: read currently-checked target_langs chips ──────────
+      const filterForm = document.getElementById('library-filter-form');
+      function selectedFilterLangs() {
+        if (!filterForm) return (data.default_target_langs || []).slice();
+        const boxes = filterForm.querySelectorAll('input[name="target_langs"]:checked');
+        const langs = Array.from(boxes).map(b => b.value);
+        // Fallback to the server-rendered selection if the user has
+        // unchecked everything — submitting zero langs is meaningless,
+        // we always need at least one to queue a job.
+        return langs.length > 0
+          ? langs
+          : (data.default_target_langs || []).slice();
       }
 
+      // ── "+ Batch" buttons on each row ─────────────────────────────────────
+      // Captures the filter form's CURRENTLY checked target_langs at
+      // click time. Each added entry starts with the same lang list;
+      // the user can adjust per item in the panel.
       document.querySelectorAll('.add-to-batch-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const id = btn.dataset.itemId;
           const name = btn.dataset.itemName;
           if (batch.some(e => e.id === id)) {
-            // Already in batch — give visual feedback and skip duplicate add.
             btn.textContent = '✓ in batch';
             setTimeout(() => { btn.textContent = '+ Batch'; }, 1500);
             return;
           }
-          const defaults = captureFilterDefaults();
           batch.push({
             id, name,
-            target_lang: defaults.target_lang,
+            target_langs: selectedFilterLangs(),
+            job_ids: {},
           });
           saveBatch(batch);
           renderBatch();
-          // Brief flash on the add button.
           btn.textContent = '✓ added';
           setTimeout(() => { btn.textContent = '+ Batch'; }, 1200);
+        });
+      });
+
+      // ── "Subtitle now" button on each row ─────────────────────────────────
+      // Reads the filter form's currently-checked target_langs and fires
+      // one /api/process call per language. Results land in the row's
+      // result span via the existing showJobResult helper.
+      document.querySelectorAll('.subtitle-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.itemId;
+          const langs = selectedFilterLangs();
+          const resultSpan = document.getElementById('row-result-' + id);
+          if (resultSpan) {
+            resultSpan.innerHTML = '<span class="status-pill running">queuing ' +
+              langs.length + ' job' + (langs.length === 1 ? '' : 's') + '…</span>';
+          }
+          btn.disabled = true;
+          const pieces = [];
+          for (const lang of langs) {
+            const url = '/api/process/' + encodeURIComponent(id) +
+              '?target_lang=' + encodeURIComponent(lang);
+            try {
+              const resp = await fetch(url, { method: 'POST' });
+              if (resp.ok) {
+                const view = await resp.json();
+                pieces.push(
+                  '<a class="status-pill queued" href="/jobs/' +
+                    encodeURIComponent(view.id) + '" title="open job">' +
+                    lang + ': queued' +
+                  '</a>'
+                );
+              } else {
+                pieces.push('<span class="status-pill err">' + lang +
+                  ': HTTP ' + resp.status + '</span>');
+              }
+            } catch (e) {
+              pieces.push('<span class="status-pill err">' + lang +
+                ': network err</span>');
+            }
+          }
+          if (resultSpan) {
+            resultSpan.innerHTML = '<div class="pill-row" style="gap:0.25rem">' +
+              pieces.join('') + '</div>';
+          }
+          btn.disabled = false;
         });
       });
 
@@ -498,78 +614,86 @@
         renderBatch();
       });
 
-      // ── Process: iterate the batch, fire one /api/process call per item ──
+      // ── Process: iterate items × langs, fire one /api/process per pair ───
       processBtn.addEventListener('click', async () => {
         if (batch.length === 0) return;
-        if (!confirm('Queue ' + batch.length + ' job' + (batch.length === 1 ? '' : 's') + '?')) return;
+        // Skip entries with no langs picked; warn if all are empty.
+        const work = [];
+        for (const entry of batch) {
+          for (const lang of (entry.target_langs || [])) {
+            work.push({ entry, lang });
+          }
+        }
+        if (work.length === 0) {
+          alert('No target languages picked. Tick at least one chip per row.');
+          return;
+        }
+        const itemCount = new Set(work.map(w => w.entry.id)).size;
+        if (!confirm(
+          'Queue ' + work.length + ' job' + (work.length === 1 ? '' : 's') +
+          ' across ' + itemCount + ' item' + (itemCount === 1 ? '' : 's') + '?'
+        )) return;
 
         processBtn.disabled = true;
         clearBtn.disabled = true;
         resultEl.innerHTML = '<span class="status-pill running">submitting…</span>';
-        // Make the per-item table visible so the user sees status flow in.
         itemsTable.hidden = false;
         toggleBtn.textContent = '▲ Hide items';
 
         let queued = 0;
         let failed = 0;
-        // Snapshot the batch so removals during processing don't shift idx.
-        const snapshot = batch.slice();
-
-        for (const entry of snapshot) {
-          const statusEl = document.getElementById('batch-row-status-' + entry.id);
-          if (statusEl) statusEl.innerHTML = '<span class="status-pill queued">submitting…</span>';
-          const url = '/api/process/' + encodeURIComponent(entry.id) +
-            '?target_lang=' + encodeURIComponent(entry.target_lang);
+        for (const w of work) {
+          const url = '/api/process/' + encodeURIComponent(w.entry.id) +
+            '?target_lang=' + encodeURIComponent(w.lang);
           try {
             const resp = await fetch(url, { method: 'POST' });
             if (resp.ok) {
               const view = await resp.json();
-              // Persist the job id on the batch entry so cancel + polling
-              // can find it later, and so removing the row knows whether
-              // there's a live job to cancel.
-              const idx = batch.findIndex(e => e.id === entry.id);
+              // Persist the per-(item, lang) job id on the entry so
+              // cancel + polling can find it later.
+              const idx = batch.findIndex(e => e.id === w.entry.id);
               if (idx >= 0) {
-                batch[idx].job_id = view.id;
+                batch[idx].job_ids = batch[idx].job_ids || {};
+                batch[idx].job_ids[w.lang] = view.id;
                 saveBatch(batch);
               }
               jobsById[view.id] = view;
               queued++;
             } else {
               failed++;
-              if (statusEl) statusEl.innerHTML =
-                '<span class="status-pill err">HTTP ' + resp.status + '</span>';
             }
           } catch (e) {
             failed++;
-            if (statusEl) statusEl.innerHTML =
-              '<span class="status-pill err">network err</span>';
           }
+          paintLiveState();
         }
 
         resultEl.innerHTML = '<span class="status-pill ok">queued ' + queued +
           (failed > 0 ? ' · failed-to-submit ' + failed : '') + '</span>';
-        // Don't drain the batch on success anymore — we keep entries so the
-        // user can watch progress + cancel. They'll click Clear all when done
-        // (or remove individual rows). The cache turns any re-run into an
-        // instant hit, so leaving the items doesn't cost anything.
+        // Don't drain the batch on success — the user keeps entries to
+        // watch progress and cancel as needed. Cache turns re-runs into
+        // instant hits, so leaving items costs nothing.
         processBtn.disabled = false;
         clearBtn.disabled = false;
         startPolling();
         paintLiveState();
       });
 
-      // ── Cancel batch: fire cancel for every entry's still-active job ─────
+      // ── Cancel batch: fire cancel for every (item, lang) still-active job ─
       cancelBatchBtn.addEventListener('click', async () => {
-        const targets = batch.filter(e => {
-          const j = e.job_id ? jobsById[e.job_id] : null;
-          return j && ACTIVE_STATES.has(j.status);
-        });
-        if (targets.length === 0) return;
-        if (!confirm('Cancel ' + targets.length + ' running/queued job' +
-            (targets.length === 1 ? '' : 's') + '?')) return;
+        const targetJobIds = [];
+        for (const entry of batch) {
+          for (const jid of Object.values(entry.job_ids || {})) {
+            const j = jobsById[jid];
+            if (j && ACTIVE_STATES.has(j.status)) targetJobIds.push(jid);
+          }
+        }
+        if (targetJobIds.length === 0) return;
+        if (!confirm('Cancel ' + targetJobIds.length + ' running/queued job' +
+            (targetJobIds.length === 1 ? '' : 's') + '?')) return;
         cancelBatchBtn.disabled = true;
-        await Promise.all(targets.map(e =>
-          fetch('/api/jobs/' + encodeURIComponent(e.job_id) + '/cancel', { method: 'POST' })
+        await Promise.all(targetJobIds.map(jid =>
+          fetch('/api/jobs/' + encodeURIComponent(jid) + '/cancel', { method: 'POST' })
             .catch(() => {})
         ));
         cancelBatchBtn.disabled = false;
@@ -581,7 +705,7 @@
       renderBatch();
       // If we have any persisted job ids (user refreshed mid-batch), kick
       // off polling immediately so the UI reflects current state.
-      if (batch.some(e => e.job_id)) {
+      if (batch.some(e => Object.keys(e.job_ids || {}).length > 0)) {
         startPolling();
       }
     })();

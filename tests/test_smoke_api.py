@@ -350,17 +350,105 @@ def test_settings_page_does_not_expose_removed_defaults(client):
 def test_dashboard_pipeline_tweaks_card_renders(client):
     """0.9.2 reworked the dashboard's Parameters card into 'Pipeline
     tweaks' — vocal isolation mode, polish on/off, job timeout (and
-    VAD on the openvino backend). Pin the new pills so a future
-    template refactor doesn't quietly remove the visibility."""
+    VAD on the openvino backend). 0.11.0 ultra-compacted the labels
+    so all 4 cards fit on one row. Pin the abbreviated pills so a
+    future template refactor doesn't quietly remove the visibility."""
     r = client.get("/")
     body = r.text
     # Card header
     assert "Pipeline tweaks" in body
     # Default config (vocal_isolation=off, polish=on, backend=cpu,
-    # job_timeout=5400) should produce these pills.
+    # job_timeout=5400, prefer_embedded_subs=on) → these compact pills.
     assert "vocals: off" in body
-    assert "polish: on" in body
-    assert "timeout: 90 min" in body
+    assert ">polish<" in body          # green pill, just "polish"
+    assert ">embed-subs<" in body      # 0.10.0+ short-circuit toggle
+    assert ">90m<" in body             # timeout in minutes, compact
+
+
+def test_library_page_multi_lang_chip_row_renders(client, monkeypatch):
+    """0.11.0: the Library filter form replaces the single target_lang
+    select + missing_only checkbox with an inline chip row of multi-
+    selectable target_langs. Pin the configured-state page rendering
+    by stubbing the media-server client to return empty results.
+
+    Asserts:
+    - chip-row container is present (id="target-langs-chips")
+    - the language chips carry name="target_langs" (plural)
+    - the OLD missing_only checkbox is GONE from the page
+    - the column header reads "Embedded subs" (not per-lang yes/missing)
+    - the legacy target_lang singular query param still works for
+      backwards-compatibility with bookmarks
+    """
+    from app.config import settings
+    from app.ui import routes as routes_mod
+    from app.server.base import MediaPage, MediaLibrary, MediaItem, MediaStream
+
+    monkeypatch.setattr(settings, "_overrides",
+                        {**settings._overrides,
+                         "media_server_url": "http://stub", "media_server_api_key": "k"})
+
+    fake_item = MediaItem(
+        id="i1", name="Inception", path="/x/y.mkv", type="Movie",
+        streams=[
+            MediaStream(type="subtitle", language="en"),
+            MediaStream(type="subtitle", language="fr"),
+        ],
+    )
+    class StubClient:
+        def list_libraries(self):
+            return [MediaLibrary(id="1", name="Films", type="movies")]
+        def list_videos(self, **kw):
+            return MediaPage(items=[fake_item], total=1)
+    monkeypatch.setattr(routes_mod, "media_server_client", lambda: StubClient())
+
+    r = client.get("/library?target_langs=fr&target_langs=en")
+    assert r.status_code == 200
+    body = r.text
+    # Chip-row container + checkbox name plural form
+    assert 'id="target-langs-chips"' in body
+    assert 'name="target_langs"' in body
+    # Old missing_only checkbox must be gone
+    assert 'name="missing_only"' not in body
+    # Column header changed
+    assert "Embedded subs" in body
+    # The item's existing sub languages render as muted pills (not a
+    # per-target yes/missing decision)
+    assert ">en<" in body and ">fr<" in body
+    # Both fr + en checkboxes should be checked (selected_langs flowed
+    # through from the query string)
+    import re
+    fr_chip = re.search(r'<input type="checkbox" name="target_langs" value="fr"[^>]*>', body)
+    en_chip = re.search(r'<input type="checkbox" name="target_langs" value="en"[^>]*>', body)
+    assert fr_chip and "checked" in fr_chip.group(0)
+    assert en_chip and "checked" in en_chip.group(0)
+
+
+def test_library_page_legacy_single_target_lang_still_accepted(client, monkeypatch):
+    """The pre-0.11.0 single ?target_lang=fr query shape must still
+    work — old bookmarks shouldn't 404 just because we plural-ized
+    the param. The legacy form simply resolves to a one-element
+    selected_langs list."""
+    from app.config import settings
+    from app.ui import routes as routes_mod
+    from app.server.base import MediaPage, MediaLibrary, MediaItem
+
+    monkeypatch.setattr(settings, "_overrides",
+                        {**settings._overrides,
+                         "media_server_url": "http://stub", "media_server_api_key": "k"})
+
+    class StubClient:
+        def list_libraries(self):
+            return [MediaLibrary(id="1", name="Films", type="movies")]
+        def list_videos(self, **kw):
+            return MediaPage(items=[], total=0)
+    monkeypatch.setattr(routes_mod, "media_server_client", lambda: StubClient())
+
+    r = client.get("/library?target_lang=es")
+    assert r.status_code == 200
+    body = r.text
+    import re
+    es_chip = re.search(r'<input type="checkbox" name="target_langs" value="es"[^>]*>', body)
+    assert es_chip and "checked" in es_chip.group(0)
 
 
 def test_library_page_renders_warning_when_unconfigured(client, monkeypatch):

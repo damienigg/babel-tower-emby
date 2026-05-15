@@ -7,6 +7,67 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-05-15
+
+UI clarity pass. Three independent changes that each addressed a
+specific friction point on the Library + Dashboard pages.
+
+### Library: multi-language target selection per run
+
+The single `<select target_lang>` dropdown was replaced with an inline
+chip row of multi-selectable language checkboxes. Clicking
+**Subtitle now** queues one job per selected language; the batch panel
+lets each item have its own multi-language chip row, processing the
+cross product of items × languages.
+
+- New `target_langs` repeated query param. Legacy single `target_lang`
+  still accepted (one-element selection) so existing bookmarks keep
+  working.
+- localStorage migration: existing batch entries with `target_lang`
+  (string) auto-migrate to `target_langs` (list). Per-(item, lang)
+  job ids are tracked separately so cancel and progress work
+  correctly for the cross product.
+- The **"only show items missing &lt;LANG&gt; subs"** checkbox was
+  removed. With multi-language selection it no longer maps cleanly
+  onto a single yes/no filter.
+- The per-target **"&lt;LANG&gt; sub?"** column became
+  **"Embedded subs"** — lists every subtitle language already present
+  in the source file as small pills (`en · fr`) or `—`. The
+  embedded-subs short-circuit decision (0.10.0) takes care of the
+  rest at job time.
+
+### Dashboard: 4 cards on one row
+
+- Grid switched from `auto-fit minmax(200px, 1fr)` to explicit
+  `repeat(4, 1fr)`. Breakpoints collapse to 2-up at 1100px and 1-up
+  at 600px.
+- `card-wide` (span 2) modifier dropped — all four cards (Media
+  server / STT / Translation / Pipeline tweaks) are now equal width.
+- Pipeline tweaks pills compacted: `embedded subs: on` →
+  `embed-subs`, `polish: on` → `polish`, `VAD: on` → `VAD`,
+  `vocals: chunked / Xs chunks` collapsed to one pill,
+  `timeout: 90 min` → `90m`. Tooltips carry the full meaning.
+- The trailing explanation paragraph below the pill row was removed
+  (redundant with the Cache Explorer stats page).
+
+### OpenVINO device pill: just CPU or GPU
+
+The pill that hydrates from `/api/openvino/status` used to render as
+`AUTO → GPU` / `AUTO → CPU (fallback)`. The `AUTO → ` prefix has
+become implicit (configured_device is always AUTO in practice — the
+override knob was removed long ago) so the pill now reads simply
+**CPU** or **GPU**. Tooltip explains which one is which.
+
+### Tests
+
+- New `test_library_page_multi_lang_chip_row_renders` and
+  `test_library_page_legacy_single_target_lang_still_accepted` cover
+  the chip row + plural/singular query param compatibility.
+- `test_dashboard_pipeline_tweaks_card_renders` updated for the
+  compact pill labels.
+
+Total test count: 532 passing (was 530).
+
 ## [0.10.0] — 2026-05-15
 
 Embedded-subtitle short-circuit. When the source media already carries

@@ -60,6 +60,34 @@
     .grid-fields > div { margin-bottom: 0.4rem; }
     .grid-fields > div > label { font-size: 0.92em; margin-bottom: 0.2rem; }
 
+    /* Language chip row (0.11.0+) — inline checkbox-as-chip used on the
+       Library filter form and on each batch panel row. The native input
+       is hidden; the <span> is styled as a clickable pill that toggles
+       state when the inside input changes. Multi-select without the
+       Ctrl-click awkwardness of <select multiple>. */
+    .lang-chip-row {
+      display: flex; gap: 0.3rem; flex-wrap: wrap;
+      margin: 0.3rem 0;
+    }
+    .lang-chip {
+      display: inline-flex; align-items: center; cursor: pointer;
+      padding: 0.25rem 0.6rem; border-radius: 0.4rem;
+      font-size: 0.82em; font-weight: 500; letter-spacing: 0.01em;
+      background: var(--bt-muted-bg); color: var(--bt-muted-fg);
+      user-select: none;
+      border: 1px solid transparent;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .lang-chip input[type="checkbox"] {
+      position: absolute; opacity: 0; pointer-events: none;
+      width: 0; height: 0; margin: 0;
+    }
+    .lang-chip:has(input:checked) {
+      background: var(--bt-ok-bg); color: var(--bt-ok-fg);
+      border-color: var(--bt-ok-fg);
+    }
+    .lang-chip:hover { filter: brightness(1.08); }
+
     /* Status pills — consistent palette */
     .status-pill {
       display: inline-block; padding: 0.15rem 0.55rem; border-radius: 0.4rem;
@@ -312,26 +340,19 @@
     }
 
     /* Dashboard stat cards — compact, consistent height, balanced gutters.
-       The status grid uses an explicit auto-fit so 4 cards fit on a wide
-       viewport with comfortable spacing rather than stretching to absurd
-       widths. */
+       0.11.0+: explicit 4-column grid with a single breakpoint that
+       collapses to 2-up on tablets and 1-up on phones. The pills inside
+       each card use ultra-compact labels so a 4-up layout fits on a
+       typical 1280-wide viewport without horizontal scroll. */
     section > .grid {
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 0.65rem;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.55rem;
     }
-    /* Per-card column-span modifiers used in the dashboard grid so the
-       cards' widths match the amount of content they carry, rather than
-       every card getting an equal slice. The Speech-to-Text card has up
-       to 3 pills (backend / model / device or compute_type) which used
-       to wrap onto a second line; spanning 2 columns gives it the room
-       to stay on one line. Media server has 2 short pills and doesn't
-       need any extra room — leaving it at span 1 makes it noticeably
-       narrower next to the wider STT card without any explicit shrink
-       declaration on its end. On narrow viewports the span collapses
-       so the card doesn't take an awkward solo full-width row. */
-    .stat-card.card-wide { grid-column: span 2; }
+    @media (max-width: 1100px) {
+      section > .grid { grid-template-columns: repeat(2, 1fr); }
+    }
     @media (max-width: 600px) {
-      .stat-card.card-wide { grid-column: span 1; }
+      section > .grid { grid-template-columns: 1fr; }
     }
     .stat-card { padding: 0.65rem 0.85rem; margin: 0; }
     .stat-card header {

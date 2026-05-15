@@ -62,20 +62,18 @@
       {% endif %}
     </article>
 
-    <article class="stat-card card-wide">
+    <article class="stat-card">
       <header>Speech-to-Text</header>
       <div class="pill-row">
         <span class="status-pill ok">{{ settings.whisper_backend }}</span>
         <span class="status-pill muted">{{ settings.whisper_model }}</span>
         {% if settings.whisper_backend == 'openvino' %}
-          {# Hydrated from /api/openvino/status — empty until the first job
-             actually loads a model. Shows e.g. "AUTO → GPU" or
-             "AUTO → CPU (fallback)" so the user can see at a glance whether
-             their iGPU is doing the work. #}
+          {# Hydrated from /api/openvino/status — empty until the first
+             job actually loads a model. 0.11.0+: shows just "CPU" or
+             "GPU" (the AUTO → prefix is implicit because that's the
+             only configured_device value used in practice). #}
           <span class="status-pill muted" id="openvino-device-pill" hidden></span>
         {% else %}
-          {# CPU backend: compute_type + device as a single muted pill in
-             the row instead of a trailing <p>. Keeps the card to one line. #}
           <span class="status-pill muted">{{ settings.whisper_compute_type }} · {{ settings.whisper_device }}</span>
         {% endif %}
       </div>
@@ -125,67 +123,48 @@
        a glance whether output gets readable timings or raw Whisper.
        Job timeout surfaces the wall-clock fence so they know what
        happens to a wedged job. #}
-    <article class="stat-card card-wide">
+    <article class="stat-card">
       <header>Pipeline tweaks</header>
       <div class="pill-row">
-        {# Embedded-subs short-circuit (0.10.0+). When ON, the pipeline
-           checks the source for text subtitle tracks BEFORE running STT.
-           Same-language tracks copied as-is; other-language text tracks
-           skip STT and go straight to translation. Massively improves
-           output quality and turnaround time on libraries with embedded
-           subs. Default ON. #}
+        {# Ultra-compact pills so the card fits in a 4-up grid on a
+           1280-wide viewport. The Cache Explorer stats page on a
+           finished job carries the full per-run decision trace —
+           tooltips here are intentional, the pills are the hook. #}
         {% if settings.prefer_embedded_subs %}
-          <span class="status-pill ok">embedded subs: on</span>
+          <span class="status-pill ok" title="Use embedded text subtitle tracks when present (skips STT)">embed-subs</span>
         {% else %}
-          <span class="status-pill warn">embedded subs: off · STT always runs</span>
+          <span class="status-pill warn" title="Embedded-subs short-circuit OFF — STT runs even when subs exist">embed-subs: off</span>
         {% endif %}
 
-        {# Vocal isolation — show the chosen mode + a small note that
-           it auto-skips on 5.1+ sources. The footnote is the entire
-           reason this got promoted onto the dashboard. #}
         {% set vi_mode = settings.vocal_isolation_mode %}
         {% if vi_mode == 'off' %}
-          <span class="status-pill muted">vocals: off</span>
+          <span class="status-pill muted" title="Vocal isolation off (5.1+ sources use FC pan instead, regardless)">vocals: off</span>
         {% elif vi_mode == 'chunked' %}
-          <span class="status-pill ok">vocals: chunked</span>
-          <span class="status-pill muted">{{ settings.vocal_isolation_chunk_seconds }}s chunks</span>
+          <span class="status-pill ok" title="Demucs vocal isolation in {{ settings.vocal_isolation_chunk_seconds }}s chunks (stereo/mono only)">vocals: chunked</span>
         {% else %}
-          <span class="status-pill warn">vocals: full · ≥ 12 GB RAM</span>
+          <span class="status-pill warn" title="Demucs FULL — needs ≥ 12 GB RAM">vocals: full</span>
         {% endif %}
 
-        {# Readability polish — green when on (defaults), warn when
-           explicitly disabled (likely a forgotten override). #}
         {% if settings.polish_enabled %}
-          <span class="status-pill ok">polish: on</span>
+          <span class="status-pill ok" title="Readability polish: merge short cues + extend display duration">polish</span>
         {% else %}
-          <span class="status-pill warn">polish: off · raw Whisper timing</span>
+          <span class="status-pill warn" title="Polish OFF — raw Whisper timing (sub-second cues will read fast)">polish: off</span>
         {% endif %}
 
-        {# Openvino-only knob: VAD pre-filter. Hidden on cpu backend
-           because faster-whisper has its own internal VAD that this
-           toggle doesn't control. #}
         {% if settings.whisper_backend == 'openvino' %}
           {% if settings.vad_enabled %}
-            <span class="status-pill ok">VAD: on</span>
+            <span class="status-pill ok" title="Silero VAD pre-filter ON (recommended on OpenVINO)">VAD</span>
           {% else %}
-            <span class="status-pill warn">VAD: off · hallucination risk</span>
+            <span class="status-pill warn" title="VAD off — hallucination risk on silent passages">VAD: off</span>
           {% endif %}
         {% endif %}
 
-        {# Wall-clock fence per job. 0 disables. Display in minutes
-           since hour-level resolution is what operators care about. #}
         {% if settings.job_timeout_seconds and settings.job_timeout_seconds > 0 %}
-          <span class="status-pill muted">timeout: {{ (settings.job_timeout_seconds / 60)|int }} min</span>
+          <span class="status-pill muted" title="Wall-clock per-job timeout">{{ (settings.job_timeout_seconds / 60)|int }}m</span>
         {% else %}
-          <span class="status-pill warn">timeout: none</span>
+          <span class="status-pill warn" title="No per-job timeout — a wedged job can run forever">no timeout</span>
         {% endif %}
       </div>
-      <p class="muted small" style="margin: 0.4rem 0 0;">
-        Embedded subs run when the source already carries text subtitle
-        tracks (PGS bitmap subs still go through STT). Vocal isolation
-        auto-skips on 5.1+ sources. See the Cache Explorer stats page on
-        a finished job for the full per-run decision trace.
-      </p>
     </article>
 
   </div>
@@ -213,25 +192,34 @@
         const r = await fetch('/api/openvino/status');
         if (!r.ok) return;
         const data = await r.json();
-        const requested = data.configured_device || 'AUTO';
         const models = data.models || {};
         const entries = Object.values(models);
         if (entries.length === 0) {
-          pill.textContent = requested + ' → not loaded yet';
+          pill.textContent = 'not loaded yet';
+          pill.className = 'status-pill muted';
+          pill.title = 'OpenVINO device picker hasn\'t loaded a model yet — runs lazily on the first job';
           pill.hidden = false;
           return;
         }
-        // If every model picked the same device, show a single combined
-        // pill. Otherwise list them.
+        // 0.11.0+: just show the effective device (CPU or GPU) — the
+        // AUTO prefix is implicit because configured_device is always
+        // AUTO in practice (we removed the explicit override knob).
+        // If every model picked the same device, single pill. Otherwise
+        // list them (rare — happens only if the user has multiple
+        // models concurrently loaded with different fallback decisions).
         const picks = entries.map(e => (e.selected || []).join(',') || '?');
         const unique = [...new Set(picks)];
         if (unique.length === 1) {
           const dev = unique[0];
-          pill.textContent = requested + ' → ' + dev;
+          pill.textContent = dev;
           pill.className = 'status-pill ' + (dev === 'GPU' ? 'ok' : 'warn');
+          pill.title = (dev === 'GPU')
+            ? 'OpenVINO selected the Intel iGPU (good)'
+            : 'OpenVINO fell back to CPU — iGPU unavailable or not whitelisted';
         } else {
-          pill.textContent = requested + ' → mixed (' + picks.join(', ') + ')';
+          pill.textContent = 'mixed';
           pill.className = 'status-pill warn';
+          pill.title = 'OpenVINO picked different devices for different models: ' + picks.join(', ');
         }
         pill.hidden = false;
       } catch (e) { /* leave hidden */ }
