@@ -317,21 +317,22 @@ _FIELD_META: list[dict[str, Any]] = [
      "label": "Demucs model", "type": "select",
      "show_if": {"field": "vocal_isolation_enabled", "equals": "true"},
      "options": [
-         {"value": "htdemucs_ft",
-          "label": "htdemucs_ft · [~330 MB resident · 4-stem · recommended] single fine-tuned model, lightest 4-stem option"},
          {"value": "htdemucs",
-          "label": "htdemucs · [~1.5 GB resident · 4-stem · best quality] BagOfModels of 4 — marginally better but heavy on RAM"},
+          "label": "htdemucs · [~500 MB peak · 4-stem · recommended] single model, lightest 4-stem option"},
+         {"value": "htdemucs_ft",
+          "label": "htdemucs_ft · [~1.5 GB peak · 4-stem · marginally better] bag of 4 stem-specialized models, ~0.3 dB SDR uplift"},
          {"value": "mdx_extra_q",
-          "label": "mdx_extra_q · [~800 MB resident · 2-stem · faster] quantized vocals/no_vocals — useful fallback"},
+          "label": "mdx_extra_q · [~800 MB peak · 2-stem · fallback] quantized vocals/no_vocals only — use if even htdemucs is too heavy"},
      ],
-     "help": "htdemucs_ft is the recommended default — a single fine-"
-             "tuned model with the same per-model quality as htdemucs "
-             "but ~4× less RAM. Plain htdemucs is a BagOfModels of "
-             "FOUR htdemucs_ft instances; the bag averages them for "
-             "marginally better separation but blows RAM budgets on a "
-             "6 GB cgroup. mdx_extra_q is the lightest option (2-stem, "
-             "quantized) — slightly worse vocal fidelity but useful "
-             "when you're hitting OOM kills even on htdemucs_ft."},
+     "help": "htdemucs is the recommended default — a single Hybrid "
+             "Transformer Demucs model with the lightest RAM footprint "
+             "for a 4-stem result. htdemucs_ft is a bag of FOUR fine-"
+             "tuned stem-specialized models with marginally better "
+             "separation (~0.3 dB SDR improvement on MUSDB18) but 3× "
+             "the RAM — pick this only if you have headroom and care "
+             "about the last few percent of quality. mdx_extra_q is the "
+             "lightest option (2-stem only, quantized) — useful as a "
+             "fallback when even htdemucs OOMs on a tight cgroup."},
     {"key": "vocal_isolation_chunk_seconds", "section": "Speech-to-Text",
      "label": "Demucs chunk size (seconds)", "type": "number",
      "show_if": {"field": "vocal_isolation_enabled", "equals": "true"},

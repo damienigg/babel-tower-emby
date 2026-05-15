@@ -43,18 +43,22 @@ class _EnvSettings(BaseSettings):
     # dialogue?" Inception / Dunkirk / sci-fi action: yes, big win.
     # Dialog-driven dramas with sparse score: marginal win.
     vocal_isolation_enabled: bool = False
-    # Demucs model identifier. Default ``htdemucs_ft`` is a single
-    # fine-tuned 4-stem model (~330 MB resident). The plain
-    # ``htdemucs`` is a BagOfModels of FOUR htdemucs_ft instances —
-    # marginally better separation for music production but ~4× the
-    # RAM (~1.5 GB resident), enough to OOM-kill on a 6 GB cgroup
-    # before apply_model() even starts. For our use case (feeding
-    # Whisper, not remixing) htdemucs_ft is the right default.
-    # ``mdx_extra_q`` is the quantized 2-stem (vocals/no_vocals)
-    # variant — even lighter (~800 MB resident), slightly worse
-    # fidelity, useful as a fallback. All download to ``HF_HOME`` on
-    # first run.
-    vocal_isolation_model: str = "htdemucs_ft"
+    # Demucs model identifier. Default ``htdemucs`` is a bag of ONE
+    # single model (~500 MB peak resident) — the original Hybrid
+    # Transformer Demucs. ``htdemucs_ft`` is a bag of FOUR fine-tuned
+    # stem-specialized models (~1.5 GB peak resident) with marginally
+    # better separation quality (~0.3 dB SDR improvement on MUSDB18,
+    # imperceptible for our Whisper-feed use case). ``mdx_extra_q`` is
+    # a quantized 2-stem (vocals/no_vocals) variant — even lighter
+    # (~800 MB resident), useful as a fallback when even htdemucs is
+    # too heavy. All download to ``HF_HOME`` on first run.
+    #
+    # Pre-0.7.30 default was briefly htdemucs_ft based on the
+    # (incorrect) assumption that ``htdemucs`` was the heavy bag and
+    # ``_ft`` was the light single — verified directly against
+    # demucs/remote/*.yaml that this is the opposite. Reverted to the
+    # lighter htdemucs default.
+    vocal_isolation_model: str = "htdemucs"
     # How many seconds of audio to load into RAM per Demucs pass.
     # ``apply_model`` peak memory scales with chunk_seconds × channels
     # × samplerate × 4 stems × 4 bytes. At 300 s (5 min) on a 44.1 kHz

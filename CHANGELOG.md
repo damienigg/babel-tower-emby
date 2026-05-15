@@ -7,6 +7,42 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.30] — 2026-05-15
+
+### Fixed
+
+- **Revert 0.7.29's default Demucs model from ``htdemucs_ft`` back to
+  ``htdemucs``.** The 0.7.29 release switched the default based on a
+  misreading of the demucs registry: I claimed ``htdemucs`` was a
+  BagOfModels of 4 (~1.5 GB resident) and ``htdemucs_ft`` was a single
+  light model (~330 MB). Verified directly against
+  ``demucs/remote/htdemucs.yaml`` and ``htdemucs_ft.yaml`` that the
+  opposite is true:
+  - ``htdemucs`` → bag of ONE model (single checkpoint), ~500 MB peak
+  - ``htdemucs_ft`` → bag of FOUR stem-specialized fine-tuned
+    models, ~1.5 GB peak, marginally better separation (~0.3 dB SDR)
+  So 0.7.29's default switch moved users from the lighter model to
+  the heavier one — the opposite of the intent. 0.7.30 reverts.
+- **Settings UI labels for the Demucs model dropdown rectified.** Now
+  show actual peak-RAM costs (~500 MB for htdemucs, ~1.5 GB for
+  htdemucs_ft, ~800 MB for mdx_extra_q) and accurately describe each
+  as bag-size + quality-tier.
+
+### Notes
+
+- The streaming chunking from 0.7.29 is unchanged and remains the
+  primary OOM fix. Output tensor blowup (~12.5 GB for a 2.5 h film's
+  4-stem output) was independent of the model choice — both htdemucs
+  and htdemucs_ft would have OOM-killed without chunking.
+
+### Action required for users who upgraded to 0.7.29
+
+- If 0.7.29 set your ``vocal_isolation_model`` to ``htdemucs_ft`` via
+  the new default and you've not yet customized it, you'll want to
+  flip it back to ``htdemucs`` in Settings → Speech-to-Text. We don't
+  auto-migrate persisted settings (out of respect for users who
+  deliberately picked a value), so the flip is manual.
+
 ## [0.7.29] — 2026-05-15
 
 ### Fixed
