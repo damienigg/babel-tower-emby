@@ -48,6 +48,33 @@ def _bin_index(duration_s: float) -> int:
 
 
 @dataclass
+class AudioPrepMetrics:
+    """Captured at audio-extraction time. Records WHICH input-prep path
+    the pipeline chose and whether any safety fallback fired.
+
+    - ``source_channels`` / ``source_channel_layout``: what ffprobe
+      reported for the selected audio track.
+    - ``used_center_channel``: True when the 5.1+ optimised path ran
+      (``pan=mono|c0=FC`` — Whisper saw dialogue-only audio). False
+      means the standard stereo-to-mono downmix path.
+    - ``loudnorm_applied``: the EBU R128 ``loudnorm=I=-23`` filter is
+      currently applied on every path; the flag exists so a future
+      ablation run (loudnorm off) can be told apart from a legacy
+      pre-0.7.33 entry where the field is None.
+    - ``optimised_chain_failed``: True when the optimised filter
+      chain rejected the layout and we fell back to plain downmix.
+      Reading this with ``used_center_channel`` lets the stats page
+      surface "we tried center extraction but had to retry" vs
+      "we never tried it" vs "it worked".
+    """
+    source_channels: int = 0
+    source_channel_layout: str | None = None
+    used_center_channel: bool = False
+    loudnorm_applied: bool = False
+    optimised_chain_failed: bool = False
+
+
+@dataclass
 class VocalIsolationMetrics:
     """Captured when the Demucs vocal-isolation phase ran. None when the
     feature was off for this run — downstream consumers gate the stats
@@ -157,6 +184,50 @@ class WhisperMetrics:
 
 
 @dataclass
+class AntiHallucinationMetrics:
+    """Captured from the 0.7.33 anti-hallucination filter.
+    Splits the drop count by category (blacklist vs n-gram repetition)
+    so the stats page can distinguish a YouTube-tail-heavy run from a
+    stuck-loop-heavy run.
+
+    - ``safety_bailout``: True when the >= 90% drop-threshold guard
+      fired and the filter returned the ORIGINAL cue list unchanged.
+      A True here means the counts ARE what we WOULD have dropped,
+      not what we actually dropped — the operator should review the
+      .vtt before trusting it.
+    """
+    input_count: int = 0
+    blacklist_dropped: int = 0
+    repetition_dropped: int = 0
+    output_count: int = 0
+    safety_bailout: bool = False
+
+
+@dataclass
+class PolishMetrics:
+    """Captured during the 0.7.20+ readability polish pass. Counts
+    each kind of edit so the stats page can show how much the cue
+    list was reshaped from raw STT output.
+
+    - ``cues_merged``: pairs that the merge pass collapsed into one.
+      A value of 5 means 5 cues vanished into their predecessors
+      (input count - output count = cues_merged when merge is the
+      only operation that removes cues).
+    - ``cues_extended``: cues whose ``end`` was pushed forward by
+      the extend pass to meet the minimum-display-duration floor.
+    - ``enabled``: False when ``settings.polish_enabled`` was off
+      for this run — distinguishes "polish ran with no edits to
+      make" (enabled=True, counts=0) from "polish was disabled"
+      (enabled=False).
+    """
+    enabled: bool = False
+    input_count: int = 0
+    output_count: int = 0
+    cues_merged: int = 0
+    cues_extended: int = 0
+
+
+@dataclass
 class TranslationMetrics:
     """Captured after ``provider.translate(...)`` returns. We measure
     from OUTSIDE the provider — counts + chars on input vs output cue
@@ -231,10 +302,13 @@ class PipelineMetrics:
     so consumers downstream (stats sidecar, transcript cache replay)
     can gracefully degrade if a particular phase wasn't instrumented
     in the run that produced the payload."""
+    audio_prep: AudioPrepMetrics | None = None
     vocal_isolation: VocalIsolationMetrics | None = None
     vad: VadMetrics | None = None
     packing: PackingMetrics | None = None
     whisper: WhisperMetrics | None = None
+    anti_hallucination: AntiHallucinationMetrics | None = None
+    polish: PolishMetrics | None = None
     translation: TranslationMetrics | None = None
 
 

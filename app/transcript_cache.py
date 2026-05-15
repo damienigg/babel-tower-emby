@@ -76,7 +76,8 @@ def _pm_from_dict(data: dict) -> "PipelineMetrics | None":
         return None
     from app.pipeline_metrics import (
         PipelineMetrics, VocalIsolationMetrics, VadMetrics, PackingMetrics,
-        WhisperMetrics, TranslationMetrics,
+        WhisperMetrics, TranslationMetrics, AudioPrepMetrics,
+        AntiHallucinationMetrics, PolishMetrics, RefineMetrics,
     )
     def _construct(cls, src):
         if not isinstance(src, dict):
@@ -85,11 +86,20 @@ def _pm_from_dict(data: dict) -> "PipelineMetrics | None":
         # break old code via TypeError.
         known = {f.name for f in cls.__dataclass_fields__.values()}
         return cls(**{k: v for k, v in src.items() if k in known})
+    whisper = _construct(WhisperMetrics, data.get("whisper"))
+    if whisper is not None and isinstance(whisper.refine, dict):
+        # Nested refine record was rehydrated as a bare dict by the
+        # generic _construct (no per-field type inspection). Re-coerce
+        # to a RefineMetrics so the template's attribute access works.
+        whisper.refine = _construct(RefineMetrics, whisper.refine)
     return PipelineMetrics(
+        audio_prep=_construct(AudioPrepMetrics, data.get("audio_prep")),
         vocal_isolation=_construct(VocalIsolationMetrics, data.get("vocal_isolation")),
         vad=_construct(VadMetrics, data.get("vad")),
         packing=_construct(PackingMetrics, data.get("packing")),
-        whisper=_construct(WhisperMetrics, data.get("whisper")),
+        whisper=whisper,
+        anti_hallucination=_construct(AntiHallucinationMetrics, data.get("anti_hallucination")),
+        polish=_construct(PolishMetrics, data.get("polish")),
         translation=_construct(TranslationMetrics, data.get("translation")),
     )
 

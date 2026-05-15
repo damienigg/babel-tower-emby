@@ -7,6 +7,66 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-05-15
+
+Observability follow-up for 0.8.0 — every audio-mode quality
+improvement (1 through 7 in the no-LLM roadmap) now writes
+structured metrics to the run's ``pipeline_metrics`` block and the
+Cache Explorer stats page surfaces each one in its own section.
+Pure observability: no behaviour change in the pipeline itself.
+
+### Added
+
+- **``AudioPrepMetrics``** in ``app/pipeline_metrics.py`` — records
+  source channel count + layout, whether the 5.1+ center-channel
+  extraction path ran (vs the stereo→mono downmix path), whether
+  loudnorm was applied, and whether the optimised filter chain
+  failed and triggered the downmix-only fallback. Populated by
+  ``audio.extract_audio`` via a new optional ``prep_stats`` sink
+  parameter (keeps the yield shape backwards-compatible — existing
+  tests and callers don't need to adapt).
+
+- **``AntiHallucinationMetrics``** — splits the YouTube-tail
+  signature-phrase drops from the n-gram repetition drops so the
+  operator can tell at a glance which family of hallucinations the
+  filter caught this run. New ``safety_bailout`` flag surfaces the
+  ≥ 90 %-would-drop safety net firing (original cues preserved
+  unchanged; counts describe what WOULD have been dropped). The
+  legacy aggregate ``whisper.hallucinations_dropped`` field stays
+  populated for backwards-compatibility with consumers reading
+  ``pipeline_metrics`` directly.
+
+- **``PolishMetrics``** in ``app/pipeline/polish.py`` and the
+  metrics module. Reports how many cues the merge pass collapsed
+  vs how many cues the extend pass advanced. New
+  ``polish_cues_with_stats`` helper returns ``(cues, stats)``; the
+  bare ``polish_cues`` keeps its current signature for the existing
+  test surface and ``polish_vtt_text`` callers.
+
+- **Cache Explorer stats page** (``app/templates/cache_stats.html``)
+  gains four new sections: **Audio prep** (channels / center pan /
+  loudnorm / fallback), **Refine pass** (0.8.0 confidence-gated
+  re-transcription — buckets evaluated / weak / refined, cues
+  added/replaced, skip reason), **Anti-hallucination** (split
+  drops + safety bailout indicator), and **Readability polish**
+  (merged / extended counts). All sections render only when the
+  corresponding sub-metric block is present, so pre-0.8.1 cache
+  hits surface what they have without breaking.
+
+### Changed
+
+- **``transcript_cache._pm_from_dict``** rehydrates the new
+  sub-records and also re-coerces the nested
+  ``WhisperMetrics.refine`` block from a bare dict to a proper
+  ``RefineMetrics`` dataclass (fixes attribute access in templates
+  that read ``wh.refine.buckets_evaluated``).
+
+### Fixed
+
+- ``tests/test_perf_hardening.py`` — drive-by cleanup of a
+  ``mode="audio"`` kwarg that 0.7.32's purge missed; the test was
+  failing on the broken signature.
+
 ## [0.8.0] — 2026-05-15
 
 Minor-version bump motivated by the ampleur of audio-mode-only changes

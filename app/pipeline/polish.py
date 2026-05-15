@@ -36,10 +36,29 @@ the polished output's distribution matches the SRT shape closely.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from app.config import settings
 from app.pipeline.stt import Cue
+
+
+@dataclass
+class PolishStats:
+    """Telemetry from one polish pass. ``enabled=False`` indicates
+    ``settings.polish_enabled`` was off (the call was a passthrough);
+    counts are zero in that case. Otherwise:
+
+    - ``cues_merged``: pairs the merge pass collapsed into one cue
+      (i.e. ``input_count - output_count`` when merge is the only
+      removing operation).
+    - ``cues_extended``: cues whose ``end`` was pushed forward by
+      the extend pass to meet the readability floor.
+    """
+    enabled: bool = False
+    input_count: int = 0
+    output_count: int = 0
+    cues_merged: int = 0
+    cues_extended: int = 0
 
 
 def polish_cues(cues: list[Cue]) -> list[Cue]:
@@ -47,17 +66,42 @@ def polish_cues(cues: list[Cue]) -> list[Cue]:
     a NEW list — the input is not mutated, so callers that hold a
     reference to the original (e.g. the cache layer) see the
     pre-polish version unchanged."""
+    polished, _ = polish_cues_with_stats(cues)
+    return polished
+
+
+def polish_cues_with_stats(cues: list[Cue]) -> tuple[list[Cue], PolishStats]:
+    """Same as ``polish_cues`` but also returns a ``PolishStats``
+    record describing what changed. Used by the processor to feed
+    the stats page; existing callers (tests, ``polish_vtt_text``)
+    keep using the simpler ``polish_cues`` signature."""
+    stats = PolishStats(
+        enabled=bool(settings.polish_enabled),
+        input_count=len(cues),
+        output_count=len(cues),
+    )
     if not cues or not settings.polish_enabled:
-        return cues
+        return cues, stats
     polished = [replace(c) for c in cues]   # work on copies
     if settings.merge_adjacent_cues:
-        polished = _merge_adjacent(polished)
-    polished = _extend_min_duration(polished)
+        polished, merged_count = _merge_adjacent_with_count(polished)
+        stats.cues_merged = merged_count
+    polished, extended_count = _extend_min_duration_with_count(polished)
+    stats.cues_extended = extended_count
     # Re-number IDs sequentially so the cue list stays addressable
     # after merges drop entries.
     for i, c in enumerate(polished):
         c.id = i
-    return polished
+    stats.output_count = len(polished)
+    return polished, stats
+
+
+def _merge_adjacent_with_count(cues: list[Cue]) -> tuple[list[Cue], int]:
+    """Wrapper that also reports how many cues were folded away.
+    A return value of (out, k) means k cues vanished into their
+    predecessors (``len(out) == len(cues) - k``)."""
+    out = _merge_adjacent(cues)
+    return out, max(0, len(cues) - len(out))
 
 
 def _merge_adjacent(cues: list[Cue]) -> list[Cue]:
@@ -190,6 +234,15 @@ def _parse_vtt_to_cues(vtt_text: str) -> tuple[list[Cue], str | None]:
                 next_id += 1
             break
     return cues, note
+
+
+def _extend_min_duration_with_count(cues: list[Cue]) -> tuple[list[Cue], int]:
+    """Wrapper that counts how many cues had their end advanced.
+    Same semantics as ``_extend_min_duration`` (mutates in-place)."""
+    pre_ends = [c.end for c in cues]
+    out = _extend_min_duration(cues)
+    extended = sum(1 for before, c in zip(pre_ends, out) if c.end > before)
+    return out, extended
 
 
 def _extend_min_duration(cues: list[Cue]) -> list[Cue]:

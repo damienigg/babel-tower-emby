@@ -214,6 +214,60 @@
 {% if stats.pipeline_metrics %}
   {% set pm = stats.pipeline_metrics %}
 
+  {# Audio prep section (channel routing + loudnorm) #}
+  {% if pm.audio_prep %}
+    {% set ap = pm.audio_prep %}
+    <section>
+      <h2>Audio prep <span class="muted small">(input routing — center-channel extraction + loudnorm before STT)</span></h2>
+      <table class="kv">
+        <tr><th>Source channels</th><td>
+          {{ ap.source_channels or '—' }}
+          {% if ap.source_channel_layout %}
+            <span class="muted small">({{ ap.source_channel_layout }})</span>
+          {% endif %}
+        </td></tr>
+        <tr><th>Center-channel extraction</th><td>
+          {% if ap.used_center_channel %}
+            <span class="status-pill ok">FC pan</span>
+            <span class="muted small">
+              (5.1+ source → ffmpeg <code>pan=mono|c0=FC</code> selected
+              the dialogue-only front-center channel. Whisper saw clean
+              vocals for free — no Demucs needed.)
+            </span>
+          {% else %}
+            <span class="status-pill muted">downmix</span>
+            <span class="muted small">
+              (stereo/mono source — standard mono downmix.
+              Center extraction only fires on 5.1+ tracks.)
+            </span>
+          {% endif %}
+        </td></tr>
+        <tr><th>Loudnorm</th><td>
+          {% if ap.loudnorm_applied %}
+            <span class="status-pill ok">−23 LUFS</span>
+            <span class="muted small">
+              (EBU R128 single-pass — brings the audio into Whisper's
+              training-data loudness range)
+            </span>
+          {% else %}
+            <span class="status-pill muted">off</span>
+          {% endif %}
+        </td></tr>
+        {% if ap.optimised_chain_failed %}
+        <tr><th>Filter chain fallback</th><td>
+          <span class="status-pill warn">retried</span>
+          <span class="warn-text small">
+            (the optimised FC-pan filter rejected the layout — usually a
+            non-standard remux that claims 5.1 without an FC channel.
+            We fell back to plain stereo downmix; output is still valid,
+            just without the center-extraction benefit.)
+          </span>
+        </td></tr>
+        {% endif %}
+      </table>
+    </section>
+  {% endif %}
+
   {# Vocal isolation section (Demucs) #}
   {% if pm.vocal_isolation and pm.vocal_isolation.enabled %}
     {% set vi = pm.vocal_isolation %}
@@ -369,6 +423,127 @@
             (cues emitted with <code>end &lt;= start</code> — usually hallucinations,
             but a spike means the model is producing compressed timestamps on
             packed windows; corroborates the very-short-cue signal above)
+          </span>
+        </td></tr>
+      </table>
+    </section>
+
+    {# Refine pass — 0.8.0 confidence-gated re-transcription. Surfaced as a
+       sibling section so it gets its own header in the navigation flow. #}
+    {% if wh.refine %}
+      {% set rf = wh.refine %}
+      <section>
+        <h2>Refine pass <span class="muted small">(0.8.0 — confidence-gated re-transcription of weak 10-min buckets)</span></h2>
+        <table class="kv">
+          <tr><th>Buckets evaluated</th><td>{{ rf.buckets_evaluated }}</td></tr>
+          <tr><th>Weak buckets</th><td>
+            {{ rf.buckets_weak }}
+            <span class="muted small">(coverage &lt; 30 % OR mean avg_logprob &lt; −1.0)</span>
+          </td></tr>
+          <tr><th>Buckets re-transcribed</th><td>
+            {{ rf.buckets_refined }}
+            <span class="muted small">
+              (capped at 20 % of audio re-passed — the safety budget)
+            </span>
+          </td></tr>
+          <tr><th>Cues added / replaced</th><td>
+            {{ rf.cues_added }} added · {{ rf.cues_replaced }} replaced
+          </td></tr>
+          <tr><th>Audio re-passed</th><td>{{ rf.audio_seconds_refined|int|duration }}
+            <span class="muted small">({{ rf.audio_seconds_refined }} s)</span></td></tr>
+          {% if rf.skipped_reason %}
+          <tr><th>Skip reason</th><td>
+            <code>{{ rf.skipped_reason }}</code>
+            <span class="muted small">
+              (refine phase was a no-op — common reasons:
+              <code>first_pass_clean</code> = nothing weak; <code>no_logprob_data</code>
+              = OpenVINO backend can't surface per-segment logprobs;
+              <code>no_buckets_in_budget</code> = all weak buckets would
+              blow the 20 % audio cap)
+            </span>
+          </td></tr>
+          {% endif %}
+        </table>
+      </section>
+    {% endif %}
+  {% endif %}
+
+  {# Anti-hallucination section — 0.7.33 YouTube-tail + repetition filter #}
+  {% if pm.anti_hallucination %}
+    {% set ah = pm.anti_hallucination %}
+    <section>
+      <h2>Anti-hallucination <span class="muted small">(0.7.33 — drops YouTube-tail signature phrases + n-gram stuck loops)</span></h2>
+      <table class="kv">
+        <tr><th>Input cues</th><td>{{ ah.input_count }}</td></tr>
+        <tr><th>Blacklist drops</th><td>
+          {{ ah.blacklist_dropped }}
+          <span class="muted small">
+            (YouTube-tail signature phrases — "Thanks for watching",
+            "Subscribe", "Merci d'avoir regardé", etc.)
+          </span>
+        </td></tr>
+        <tr><th>Repetition drops</th><td>
+          {{ ah.repetition_dropped }}
+          <span class="muted small">
+            (stuck-loop n-grams — "yeah yeah yeah yeah", "no no no no")
+          </span>
+        </td></tr>
+        <tr><th>Output cues</th><td>{{ ah.output_count }}</td></tr>
+        {% if ah.safety_bailout %}
+        <tr><th>Safety bailout</th><td>
+          <span class="status-pill warn">triggered</span>
+          <span class="warn-text small">
+            (would have dropped &geq; 90 % of cues — suspected
+            mis-detection. Original cue list was preserved unchanged;
+            the drop counts above describe what WOULD have been
+            dropped. Review the .vtt — this can mean a YT-screen-grab
+            source or a track where Whisper hallucinated everywhere.)
+          </span>
+        </td></tr>
+        {% endif %}
+      </table>
+    </section>
+  {% endif %}
+
+  {# Polish section — 0.7.20+ readability polish (merge + extend) #}
+  {% if pm.polish %}
+    {% set pl = pm.polish %}
+    <section>
+      <h2>Readability polish <span class="muted small">(0.7.20+ — merges adjacent fragments + extends very-short cues)</span></h2>
+      <table class="kv">
+        <tr><th>Enabled this run</th><td>
+          {% if pl.enabled %}
+            <span class="status-pill ok">on</span>
+          {% else %}
+            <span class="status-pill muted">off</span>
+            <span class="muted small">
+              (polish was disabled when this run wrote the .vtt — viewer
+              gets raw Whisper timings, often with 40 %+ of cues under 1 s)
+            </span>
+          {% endif %}
+        </td></tr>
+        <tr><th>Cues (in / out)</th><td>
+          {{ pl.input_count }} / {{ pl.output_count }}
+          {% if pl.input_count > pl.output_count %}
+            <span class="muted small">
+              ({{ pl.input_count - pl.output_count }} cues folded into neighbours)
+            </span>
+          {% endif %}
+        </td></tr>
+        <tr><th>Merged</th><td>
+          {{ pl.cues_merged }}
+          <span class="muted small">
+            (adjacent-cue collapses where the gap was &lt;
+            <code>max_gap_to_merge_seconds</code> and the combined text
+            fit the line-wrap budget)
+          </span>
+        </td></tr>
+        <tr><th>Extended</th><td>
+          {{ pl.cues_extended }}
+          <span class="muted small">
+            (cues whose <code>end</code> was advanced to meet the minimum
+            display duration — never moves <code>start</code>, capped
+            short of the next cue to preserve idempotency)
           </span>
         </td></tr>
       </table>

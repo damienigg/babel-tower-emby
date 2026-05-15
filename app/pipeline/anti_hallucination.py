@@ -116,11 +116,17 @@ _BLACKLIST_PHRASES = frozenset({
 class FilterStats:
     """Telemetry from one anti-hallucination pass. Plumbed into
     ``pipeline_metrics`` so the stats page can show how many cues we
-    cleaned up per run."""
+    cleaned up per run.
+
+    ``safety_bailout`` is True when the >= 90% drop-threshold guard
+    fired and the filter returned the ORIGINAL cue list unchanged —
+    the counts in ``blacklisted`` / ``repetition_dropped`` describe
+    what WOULD have been dropped, not what actually was."""
     input_count: int = 0
     blacklisted: int = 0
     repetition_dropped: int = 0
     output_count: int = 0
+    safety_bailout: bool = False
 
 
 # Compiled once — normalization runs per cue.
@@ -241,6 +247,7 @@ def filter_cues(cues: list[Cue]) -> tuple[list[Cue], FilterStats]:
         # Preserve original cue list, but record what we WOULD have
         # done in stats so the metrics page surfaces it.
         stats.output_count = len(cues)
+        stats.safety_bailout = True
         return list(cues), stats
 
     # Renumber so ids are contiguous 0..N-1. Preserve timing + text.

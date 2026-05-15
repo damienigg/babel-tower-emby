@@ -274,7 +274,6 @@ def test_processor_releases_stt_before_translation(monkeypatch, tmp_path):
         target_lang="fr",
         source_lang_priority=["en", "*"],
         translation_provider="nllb",
-        mode="audio",
     )
     process(req)
 

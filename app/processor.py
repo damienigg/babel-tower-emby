@@ -256,6 +256,18 @@ def process(
                 "dialogue-only by mix convention, so isolation is redundant.",
                 channel_info.channels,
             )
+        # AudioPrepMetrics sink — populated by extract_audio (or, for
+        # the Demucs path, synthesised from channel_info below). We
+        # build the metrics record after the extraction context exits
+        # so the operator sees both the pre-decision channel info and
+        # whether the optimised filter chain had to bail out at runtime.
+        prep_stats: dict = {
+            "source_channels": channel_info.channels,
+            "source_channel_layout": channel_info.layout,
+            "used_center_channel": False,
+            "loudnorm_applied": False,
+            "optimised_chain_failed": False,
+        }
         if use_demucs:
             from app.pipeline import vocal_isolation as vi
             audio_ctx = vi.isolate_vocals(
@@ -263,8 +275,14 @@ def process(
                 progress=_scaled(progress, base=0, span=8, stage="isolating vocals"),
                 check_cancel=check_cancel,
             )
+            # Demucs path uses its own ffmpeg invocation with loudnorm
+            # applied, but skips the FC-pan optimisation (vocals come
+            # from the model output, not from a single channel).
+            prep_stats["loudnorm_applied"] = True
         else:
-            audio_ctx = audio.extract_audio(req.media_path, track.index)
+            audio_ctx = audio.extract_audio(
+                req.media_path, track.index, prep_stats=prep_stats,
+            )
 
         with audio_ctx as audio_handle:
             # vocal_isolation yields an IsolationResult; audio.extract_audio
@@ -359,10 +377,20 @@ def process(
         from app.pipeline import anti_hallucination
         filtered_cues, ah_stats = anti_hallucination.filter_cues(transcription.cues)
         transcription.cues = filtered_cues
+        from app import pipeline_metrics as pm_mod
+        if transcription.pipeline_metrics is None:
+            transcription.pipeline_metrics = pm_mod.PipelineMetrics()
+        transcription.pipeline_metrics.anti_hallucination = pm_mod.AntiHallucinationMetrics(
+            input_count=ah_stats.input_count,
+            blacklist_dropped=ah_stats.blacklisted,
+            repetition_dropped=ah_stats.repetition_dropped,
+            output_count=ah_stats.output_count,
+            safety_bailout=ah_stats.safety_bailout,
+        )
+        # Keep the legacy whisper.hallucinations_dropped summary populated
+        # for backwards-compatibility with any consumer that reads it
+        # directly (quality.py, older cache_stats template versions).
         if ah_stats.blacklisted or ah_stats.repetition_dropped:
-            from app import pipeline_metrics as pm_mod
-            if transcription.pipeline_metrics is None:
-                transcription.pipeline_metrics = pm_mod.PipelineMetrics()
             if transcription.pipeline_metrics.whisper is None:
                 transcription.pipeline_metrics.whisper = pm_mod.WhisperMetrics()
             transcription.pipeline_metrics.whisper.hallucinations_dropped = (
@@ -373,13 +401,21 @@ def process(
         # mid-flight, the next retry hits this entry and skips the 30+ min
         # of Whisper. Empty-cue transcriptions are not stored (transcript_cache
         # handles that internally).
-        # Fold the isolation metrics into transcription.pipeline_metrics
-        # so they ride into the transcript cache and the stats sidecar
-        # alongside VAD/packing/whisper telemetry.
+        # Fold the isolation + audio-prep metrics into
+        # transcription.pipeline_metrics so they ride into the transcript
+        # cache and the stats sidecar alongside VAD/packing/whisper
+        # telemetry.
+        from app import pipeline_metrics as pm_mod
+        if transcription.pipeline_metrics is None:
+            transcription.pipeline_metrics = pm_mod.PipelineMetrics()
+        transcription.pipeline_metrics.audio_prep = pm_mod.AudioPrepMetrics(
+            source_channels=int(prep_stats.get("source_channels") or 0),
+            source_channel_layout=prep_stats.get("source_channel_layout"),
+            used_center_channel=bool(prep_stats.get("used_center_channel")),
+            loudnorm_applied=bool(prep_stats.get("loudnorm_applied")),
+            optimised_chain_failed=bool(prep_stats.get("optimised_chain_failed")),
+        )
         if vocal_isolation_metrics is not None:
-            from app import pipeline_metrics as pm_mod
-            if transcription.pipeline_metrics is None:
-                transcription.pipeline_metrics = pm_mod.PipelineMetrics()
             transcription.pipeline_metrics.vocal_isolation = vocal_isolation_metrics
         transcript_cache.store(
             transcript_content_fp,
@@ -474,9 +510,16 @@ def process(
     # No-op when settings.polish_enabled is False; otherwise gated
     # by per-knob settings. Operates on the translated cue list so
     # reading-speed math uses the target-language text length.
-    from app.pipeline.polish import polish_cues
+    from app.pipeline.polish import polish_cues_with_stats
     polish_applied = bool(settings.polish_enabled)
-    translated = polish_cues(translated)
+    translated, polish_stats = polish_cues_with_stats(translated)
+    transcription.pipeline_metrics.polish = pm_mod.PolishMetrics(
+        enabled=polish_stats.enabled,
+        input_count=polish_stats.input_count,
+        output_count=polish_stats.output_count,
+        cues_merged=polish_stats.cues_merged,
+        cues_extended=polish_stats.cues_extended,
+    )
 
     # The NOTE header in the .vtt records provenance so a downstream
     # viewer (Cache Explorer / stats page / a human reading the file)

@@ -176,7 +176,10 @@ def _run_ffmpeg_extract(
 
 
 @contextmanager
-def extract_audio(media_path: str, track_index: int):
+def extract_audio(
+    media_path: str, track_index: int,
+    *, prep_stats: dict | None = None,
+):
     """Extract a single audio track to a 16 kHz mono WAV temp file
     under settings.cache_dir/tmp/. Yields the path; deletes it on
     context exit even when the caller raised.
@@ -190,9 +193,23 @@ def extract_audio(media_path: str, track_index: int):
     non-standard layout with no FC channel — we retry with a bare
     downmix-only command. The user still gets a valid 16 kHz mono
     WAV, just without the center-channel optimisation. Better than
-    failing the whole job over an edge-case mux."""
+    failing the whole job over an edge-case mux.
+
+    ``prep_stats``: optional mutable dict the caller passes in to
+    receive a description of the audio-prep decision. Populated with
+    ``source_channels``, ``source_channel_layout``, ``used_center_channel``,
+    ``loudnorm_applied`` (always True today), and ``optimised_chain_failed``.
+    Keeps the yield shape (bare ``Path``) unchanged so existing callers
+    and test fakes don't need to adapt.
+    """
     info = probe_channel_layout(media_path, track_index)
     filters, extra_flags = _build_filter_chain(info)
+    if prep_stats is not None:
+        prep_stats["source_channels"] = info.channels
+        prep_stats["source_channel_layout"] = info.layout
+        prep_stats["used_center_channel"] = info.has_center
+        prep_stats["loudnorm_applied"] = True
+        prep_stats["optimised_chain_failed"] = False
     if info.has_center:
         _log.info(
             "audio prep: source has %d channels (layout=%s) → center-channel "
@@ -229,6 +246,10 @@ def extract_audio(media_path: str, track_index: int):
                     media_path, track_index, out_path,
                     fallback_filters, fallback_flags,
                 )
+                if prep_stats is not None:
+                    prep_stats["optimised_chain_failed"] = True
+                    # Reality after the retry: we used downmix, not FC.
+                    prep_stats["used_center_channel"] = False
             else:
                 # Standard path failed and there's no safer fallback
                 # left to try. Bubble the error up.
