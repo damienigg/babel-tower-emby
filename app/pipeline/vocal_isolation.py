@@ -213,21 +213,37 @@ def _apply_separation(model, raw_wav: Path):
     ``(vocals_tensor, samplerate, audio_seconds_processed)``.
 
     Replaces what ``demucs.api.Separator.separate_audio_file`` would
-    have done. Loads the WAV with torchaudio, resamples if needed,
+    have done. Loads the WAV with soundfile, resamples if needed,
     pads to stereo if needed, calls ``apply_model``, and returns just
     the 'vocals' stem.
+
+    Why ``soundfile`` and not ``torchaudio.load``: torchaudio 2.6+
+    routes ``load()`` through ``load_with_torchcodec``, which raises
+    ``ImportError: TorchCodec is required`` unless the separate
+    ``torchcodec`` package is installed. soundfile is already a
+    dependency (faster-whisper uses it, and we write WAVs with it
+    elsewhere in this file) so it's the cheapest fix that also
+    sidesteps adding another heavy codec dep to the image.
 
     Tests monkeypatch this function directly so they don't need to
     fake the demucs submodules — the lifecycle invariants (release
     before yield, cleanup on exit) live in ``isolate_vocals`` and are
     independent of how separation is actually performed."""
+    import numpy as np
     import torch
     import torchaudio
+    import soundfile as sf
     from demucs.apply import apply_model
 
-    # Load mix. torchaudio returns (channels, samples).
-    mix, sr = torchaudio.load(str(raw_wav))
+    # Load mix with soundfile. Returns (samples, channels) float32 array
+    # plus the sample rate. always_2d=True keeps the shape consistent
+    # even for mono files (so .T below always works).
+    audio_np, sr = sf.read(str(raw_wav), dtype="float32", always_2d=True)
+    # soundfile is samples-major; torch/Demucs convention is channels-major.
+    mix = torch.from_numpy(np.ascontiguousarray(audio_np.T))
     if sr != model.samplerate:
+        # torchaudio.transforms.* is pure tensor math (no codec), so this
+        # path doesn't hit the torchcodec issue.
         mix = torchaudio.transforms.Resample(sr, model.samplerate)(mix)
         sr = model.samplerate
     # Demucs htdemucs is trained on stereo. If we somehow got mono,

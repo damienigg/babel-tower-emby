@@ -7,6 +7,26 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.28] — 2026-05-15
+
+### Fixed
+
+- **Vocal isolation: load WAVs with ``soundfile`` instead of
+  ``torchaudio.load``.** torchaudio 2.6+ deprecated the legacy
+  soundfile / sox_io backends and now routes ``load()`` through
+  ``load_with_torchcodec``, which raises
+  ``ImportError: TorchCodec is required for load_with_torchcodec``
+  unless the separate ``torchcodec`` package is installed. The GHCR
+  Dockerfiles pin neither ``torch`` nor ``torchaudio`` (CPU-index
+  resolves to whatever's latest) so this broke the day torchaudio
+  crossed the 2.6 boundary in our build. Fix routes the load step in
+  ``_apply_separation`` through ``soundfile.read`` — ``soundfile`` is
+  already a dependency (faster-whisper uses it, and the same module
+  writes the vocals WAV with ``sf.write``), so no new packages
+  added. ``torchaudio.transforms.Resample`` continues to be used for
+  the rate conversion — it's pure tensor math, no codec involved,
+  unaffected by the 2.6 breakage.
+
 ## [0.7.27] — 2026-05-15
 
 ### Fixed
