@@ -109,10 +109,9 @@ _SECTION_META: dict[str, str] = {
         "START HERE — without this filled in, the Library tab stays empty. "
         "Pick your server type, paste its URL + API key, save."
     ),
-    "Defaults": (
-        "Pre-set choices applied when you click 'Subtitle this' / 'Subtitle "
-        "selected' in the Library without per-job overrides."
-    ),
+    # ``Defaults`` section removed in 0.9.2 — see the note above the
+    # ``_FIELD_META`` entries for why the three Defaults fields no
+    # longer appear in the UI.
     "Speech-to-Text": (
         "Whisper transcribes audio to text — always free, fully local. "
         "Trade-off is compute time × quality × disk space, not money."
@@ -207,44 +206,32 @@ _FIELD_META: list[dict[str, Any]] = [
                 "trusted LAN. Advanced alternative: keep this ON and mount a custom CA "
                 "bundle into the container, then set SSL_CERT_FILE=/path/to/ca.crt in env."},
 
-    # ── Defaults — workflow knobs ─────────────────────────────────────────────
-    # Per-job overrides for target language, mode, and skip behavior. The
-    # provider chooser used to live here but moved into the Translation
-    # section below — it belongs with the knobs it gates.
-    {"key": "default_target_lang", "section": "Defaults",
-     "label": "Default target language", "type": "select",
-     "options": _LANGUAGE_DROPDOWN_OPTIONS,
-     "summary": "Language you want subtitles in (used when no per-job override).",
-     "details": "Coverage varies by translation provider:\n"
-                "• NLLB and DeepL support ~30 languages well\n"
-                "• LLM providers handle whatever the underlying model knows"},
+    # ── Defaults section removed in 0.9.2 ────────────────────────────────────
+    # Three params used to live here but were misleading or wrong:
+    #
+    # - ``default_target_lang``: language is a per-job choice — the Library
+    #   page exposes it inline, the onboarding wizard collects it once for
+    #   first-time setup. Having it as a "default" in Settings duplicated
+    #   the per-job picker and implied subtitle generation has an a-priori
+    #   target. Field stays in _EnvSettings for env-var compatibility and
+    #   the Library form's initial value; just no longer in the UI.
+    #
+    # - ``default_skip_if_target_audio_exists``: an explicit user click on
+    #   "Subtitle this" should NEVER be silently skipped. Default flipped
+    #   to False in 0.9.2; field hidden from UI. Power users who want the
+    #   old skip-to-save-compute behaviour can still set the env var.
+    #
+    # - ``write_detected_language_to_file``: the MKV write-back has no
+    #   downside (modifies only the EBML header, never touches audio
+    #   data) and the upside is that Emby/Jellyfin pick up the right
+    #   language on next probe. Hard-coded to always-on via the True
+    #   default; no reason to expose a toggle that nobody should flip.
+    #
     # NOTE: default_source_lang_priority is intentionally not exposed.
     # Hard-coded default ['en', '*'] in _EnvSettings handles 99% of cases.
     # Power users can override via BABEL_DEFAULT_SOURCE_LANG_PRIORITY.
     # NOTE: default_translation_provider lives in the Translation section
     # below — the provider chooser belongs with the knobs it gates.
-    {"key": "default_skip_if_target_audio_exists", "section": "Defaults",
-     "label": "Skip when target-language audio is already present", "type": "checkbox",
-     "summary": "Saves compute when the file already has an audio track in the target language.",
-     "details": "If the file already has audio in the target language, do nothing — the "
-                "user can just switch audio track in their player."},
-    {"key": "write_detected_language_to_file", "section": "Defaults",
-     "label": "Tag detected source language back into the source file (MKV only)", "type": "checkbox",
-     "summary": "Writes the detected ISO language into the source file's MKV header (Matroska only — instant, no remux).",
-     "details": "When a film's audio track has no language tag (Emby just shows 'Audio'), "
-                "language detection runs differently per backend:\n"
-                "• OpenVINO needs a Whisper-tiny pre-pass on the first 30 s (can't surface "
-                "its own auto-detection through the optimum-intel API)\n"
-                "• CPU/faster-whisper detects internally during the main transcribe call\n\n"
-                "Either way the transcription gets the right language. With this checkbox "
-                "ON, we ALSO write the detected language back into the file's EBML header "
-                "via mkvpropedit — instant, modifies only metadata, NEVER touches the "
-                "audio/video data sections. Restricted to MKV/MKA/WebM.\n\n"
-                "Non-Matroska containers (MP4/MOV/AVI/...) are deliberately left untouched: "
-                "an ffmpeg remux would technically preserve audio byte-for-byte but "
-                "rewrites the whole file with documented edge cases (timestamp "
-                "re-derivation, lost custom metadata) — not worth the risk on a media "
-                "library. Turn this off entirely to keep all source files pristine."},
 
     # ── Vocal isolation (Demucs) ──────────────────────────────────────────────
     # Single user-facing knob. The model identifier (htdemucs vs

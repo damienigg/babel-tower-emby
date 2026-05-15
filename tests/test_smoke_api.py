@@ -316,9 +316,51 @@ def test_dashboard_renders(client):
 def test_settings_page_renders(client):
     r = client.get("/settings")
     assert r.status_code == 200
-    # Each section heading should appear
-    for section in ("Translation model", "Speech-to-Text", "Defaults"):
+    # Each section heading should appear. Note: the "Defaults" section
+    # was removed in 0.9.2 — its three fields were misleading
+    # (default_target_lang duplicated the per-job picker;
+    # default_skip_if_target_audio_exists silently dropped explicit
+    # requests; write_detected_language_to_file has no downside so
+    # there was no reason to toggle it).
+    for section in ("Translation model", "Speech-to-Text", "Subtitles"):
         assert section in r.text
+
+
+def test_settings_page_does_not_expose_removed_defaults(client):
+    """0.9.2 hid three fields from the UI. Pin their absence so a
+    future merge of a stale meta entry doesn't silently re-expose
+    them. Field names (HTML id/name attributes) are stable signals."""
+    r = client.get("/settings")
+    body = r.text
+    for field_key in (
+        "default_target_lang",
+        "default_skip_if_target_audio_exists",
+        "write_detected_language_to_file",
+    ):
+        # These would appear as `id="<key>"` or `name="<key>"` if the
+        # field were rendered. Tolerate harmless occurrences in
+        # JS / data-attributes that don't add a form input.
+        for marker in (f'id="{field_key}"', f'name="{field_key}"'):
+            assert marker not in body, (
+                f"{field_key!r} should be hidden from Settings UI "
+                f"after 0.9.2 — found {marker!r} in body"
+            )
+
+
+def test_dashboard_pipeline_tweaks_card_renders(client):
+    """0.9.2 reworked the dashboard's Parameters card into 'Pipeline
+    tweaks' — vocal isolation mode, polish on/off, job timeout (and
+    VAD on the openvino backend). Pin the new pills so a future
+    template refactor doesn't quietly remove the visibility."""
+    r = client.get("/")
+    body = r.text
+    # Card header
+    assert "Pipeline tweaks" in body
+    # Default config (vocal_isolation=off, polish=on, backend=cpu,
+    # job_timeout=5400) should produce these pills.
+    assert "vocals: off" in body
+    assert "polish: on" in body
+    assert "timeout: 90 min" in body
 
 
 def test_library_page_renders_warning_when_unconfigured(client, monkeypatch):

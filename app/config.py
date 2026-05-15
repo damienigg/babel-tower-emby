@@ -253,7 +253,16 @@ class _EnvSettings(BaseSettings):
     # Either way the first call downloads the ~1.5 GB NLLB-200 model to
     # /cache/nllb-models. Users who want best quality flip this to `llm`.
     default_translation_provider: str = "nllb"
-    default_skip_if_target_audio_exists: bool = True
+    # 0.9.2: default flipped from True to False. An explicit user click
+    # on "Subtitle this" is a deliberate intent — silently skipping it
+    # because a same-language audio track happens to exist in the file
+    # is more annoying than helpful (the user can always switch audio
+    # in their player; the explicit subtitle request says "I want
+    # readable text"). The setting stays in the env-var surface so a
+    # power user who DOES want the old skip-to-save-compute behaviour
+    # can opt back in via BABEL_DEFAULT_SKIP_IF_TARGET_AUDIO_EXISTS=true,
+    # but no longer appears in the Settings UI.
+    default_skip_if_target_audio_exists: bool = False
     # When the source audio track has no language tag in the file's metadata,
     # Whisper's auto-detection still works for transcription itself. This flag
     # controls whether we ALSO write the detected ISO 639-2 code back into the

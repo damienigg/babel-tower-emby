@@ -116,11 +116,62 @@
       {% endif %}
     </article>
 
-    <article class="stat-card">
-      <header>Parameters</header>
+    {# Pipeline tweaks worth surfacing at a glance — these are the
+       parameters whose state isn't otherwise visible on the dashboard
+       (the STT + Translation cards already show backend / model /
+       provider). Vocal isolation tells the operator whether Demucs
+       will fire on stereo content; the auto-skip on 5.1+ is footnoted
+       so users don't fight the silent override. Polish tells them at
+       a glance whether output gets readable timings or raw Whisper.
+       Job timeout surfaces the wall-clock fence so they know what
+       happens to a wedged job. #}
+    <article class="stat-card card-wide">
+      <header>Pipeline tweaks</header>
       <div class="pill-row">
-        <span class="status-pill ok">{{ settings.default_target_lang }}</span>
+        {# Vocal isolation — show the chosen mode + a small note that
+           it auto-skips on 5.1+ sources. The footnote is the entire
+           reason this got promoted onto the dashboard. #}
+        {% set vi_mode = settings.vocal_isolation_mode %}
+        {% if vi_mode == 'off' %}
+          <span class="status-pill muted">vocals: off</span>
+        {% elif vi_mode == 'chunked' %}
+          <span class="status-pill ok">vocals: chunked</span>
+          <span class="status-pill muted">{{ settings.vocal_isolation_chunk_seconds }}s chunks</span>
+        {% else %}
+          <span class="status-pill warn">vocals: full · ≥ 12 GB RAM</span>
+        {% endif %}
+
+        {# Readability polish — green when on (defaults), warn when
+           explicitly disabled (likely a forgotten override). #}
+        {% if settings.polish_enabled %}
+          <span class="status-pill ok">polish: on</span>
+        {% else %}
+          <span class="status-pill warn">polish: off · raw Whisper timing</span>
+        {% endif %}
+
+        {# Openvino-only knob: VAD pre-filter. Hidden on cpu backend
+           because faster-whisper has its own internal VAD that this
+           toggle doesn't control. #}
+        {% if settings.whisper_backend == 'openvino' %}
+          {% if settings.vad_enabled %}
+            <span class="status-pill ok">VAD: on</span>
+          {% else %}
+            <span class="status-pill warn">VAD: off · hallucination risk</span>
+          {% endif %}
+        {% endif %}
+
+        {# Wall-clock fence per job. 0 disables. Display in minutes
+           since hour-level resolution is what operators care about. #}
+        {% if settings.job_timeout_seconds and settings.job_timeout_seconds > 0 %}
+          <span class="status-pill muted">timeout: {{ (settings.job_timeout_seconds / 60)|int }} min</span>
+        {% else %}
+          <span class="status-pill warn">timeout: none</span>
+        {% endif %}
       </div>
+      <p class="muted small" style="margin: 0.4rem 0 0;">
+        Vocal isolation auto-skips on 5.1+ sources — see the Cache Explorer
+        stats page on a finished job for the per-run audio-prep decision.
+      </p>
     </article>
 
   </div>

@@ -95,7 +95,12 @@ class ProcessRequest:
     target_lang: str
     source_lang_priority: list[str]
     translation_provider: str
-    skip_if_target_audio_exists: bool = True
+    # 0.9.2: default flipped to False so an explicit per-job submission
+    # never gets silently skipped because a same-language audio track
+    # happens to exist. Matches the new ``default_skip_if_target_audio_
+    # exists`` default in config.py. Callers that want the old skip
+    # behaviour can still pass ``True`` explicitly.
+    skip_if_target_audio_exists: bool = False
 
 
 @dataclass

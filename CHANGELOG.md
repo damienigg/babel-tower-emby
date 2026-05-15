@@ -7,6 +7,71 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-05-15
+
+UX cleanup of the Settings → Defaults section. The three fields it
+contained were each misleading for a different reason; this release
+removes them from the UI surface and replaces the corresponding
+dashboard card with non-obvious pipeline state instead.
+
+### Changed (UI surface)
+
+- **`default_target_lang`** — hidden from Settings UI. Subtitle
+  language is a per-job choice, not an a-priori default; the Library
+  page exposes it inline (querystring) and the onboarding wizard
+  collects it once. Field stays in `_EnvSettings` for env-var
+  compatibility and the Library form's initial value.
+- **`default_skip_if_target_audio_exists`** — **default flipped from
+  True to False**, and hidden from Settings UI. An explicit user
+  click on "Subtitle this" is deliberate intent; silently skipping
+  because a same-language audio track exists in the file is more
+  annoying than helpful. Power users who want the old skip-to-save-
+  compute behaviour can opt back in via the env var.
+- **`write_detected_language_to_file`** — hidden from Settings UI.
+  The MKV write-back has no downside (modifies only the EBML header,
+  never touches audio data) and the upside is Emby/Jellyfin picking
+  up the right language on next probe — there was no operator
+  scenario where flipping this off made sense. Default stays True.
+- **Settings → "Defaults" section** — removed entirely (no fields
+  left to render).
+
+### Changed (dashboard)
+
+The "Parameters" card on the dashboard previously showed only
+`default_target_lang` as a single pill. Reworked into **"Pipeline
+tweaks"** that surfaces the parameters whose state isn't otherwise
+visible on the dashboard:
+
+- **Vocal isolation mode** — off / chunked + chunk seconds / full,
+  with a footnote reminding operators that the auto-skip on 5.1+
+  sources is the reason this might never fire on a particular film.
+- **Polish on/off** — green when on (matches default), warning pill
+  when off (likely a forgotten override that ships raw Whisper
+  timings to viewers).
+- **VAD on** (openvino backend only) — pinned green by default,
+  warning when off because OpenVINO without Silero pre-filter
+  hallucinates on silent stretches.
+- **Job timeout** — surfaces the wall-clock fence in minutes so
+  operators know what happens to a wedged job.
+
+### Tests
+
+- `tests/test_smoke_api.py` — three updates:
+  - Updated the section-presence assertion: `Defaults` removed
+    from the expected list, `Subtitles` added.
+  - New `test_settings_page_does_not_expose_removed_defaults` pins
+    the absence of the three field IDs in Settings HTML.
+  - New `test_dashboard_pipeline_tweaks_card_renders` pins the new
+    pill set on the dashboard.
+- **527 tests passing** (was 525).
+
+### Migration note
+
+If you had `default_skip_if_target_audio_exists=True` saved in
+`/cache/settings.json` (or via the env var), that value still wins
+on upgrade — your existing behaviour is unchanged. Only fresh
+installs with no override get the new False default.
+
 ## [0.9.1] — 2026-05-15
 
 UX clarification. Users were leaving `vocal_isolation_mode=chunked` in
