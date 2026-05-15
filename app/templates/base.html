@@ -405,6 +405,94 @@
       line-height: 1.45; max-width: 70ch;
     }
 
+    /* New compact per-field help split (0.8.2+):
+       - .field-summary is always visible: one short sentence describing
+         what the field does. Sits directly under the input.
+       - .field-details is a collapsible <details> block carrying the
+         long rationale, RAM costs, "when to change" — opt-in reading
+         for users who want to dig deeper, hidden by default so the form
+         scans fast. */
+    .field-summary {
+      font-size: 0.78em; color: var(--pico-muted-color);
+      margin: 0.2rem 0 0; line-height: 1.4;
+    }
+    .field-details {
+      margin-top: 0.25rem;
+      font-size: 0.78em; color: var(--pico-muted-color);
+    }
+    .field-details > summary {
+      cursor: pointer;
+      font-size: 0.95em; line-height: 1.4;
+      color: var(--pico-primary);
+      list-style: none;
+      padding: 0.1rem 0;
+    }
+    .field-details > summary::before {
+      content: "▶ "; font-size: 0.75em; margin-right: 0.15rem;
+    }
+    .field-details[open] > summary::before { content: "▼ "; }
+    .field-details > .details-body {
+      margin-top: 0.35rem; padding: 0.45rem 0.6rem;
+      background: var(--pico-card-background-color);
+      border-left: 2px solid var(--pico-card-border-color);
+      border-radius: 0.2rem;
+      line-height: 1.45; white-space: pre-line;
+    }
+
+    /* "[default]" pill next to selects whose current value matches the
+       recommended option. Cheap visual cue so a user scanning the form
+       sees at a glance "I have not overridden anything here". */
+    .default-pill {
+      display: inline-block;
+      font-size: 0.7em; font-weight: 600;
+      letter-spacing: 0.04em; text-transform: uppercase;
+      color: var(--pico-primary);
+      background: color-mix(in srgb, var(--pico-primary) 12%, transparent);
+      padding: 0.05rem 0.4rem;
+      border-radius: 0.6rem;
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+
+    /* "Active auto-improvements" status banner at the top of Settings.
+       Lists pipeline features that run automatically — without any
+       toggle — so users see what's already being done for them and
+       don't go hunting for switches that don't exist. Compact two-
+       column grid; muted check icons keep the visual weight low. */
+    .auto-improvements {
+      background: var(--pico-card-background-color);
+      border: 1px solid var(--pico-card-border-color);
+      border-left: 4px solid var(--bt-active-bg);
+      border-radius: 0.4rem;
+      padding: 0.65rem 0.9rem;
+      margin: 0 0 1rem;
+    }
+    .auto-improvements h3 {
+      margin: 0 0 0.4rem; font-size: 0.92em; font-weight: 600;
+    }
+    .auto-improvements ul {
+      margin: 0; padding: 0; list-style: none;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.15rem 1rem;
+      font-size: 0.82em;
+    }
+    @media (max-width: 700px) { .auto-improvements ul { grid-template-columns: 1fr; } }
+    .auto-improvements li::before {
+      content: "✓"; color: var(--bt-ok-fg);
+      font-weight: 700; margin-right: 0.4rem;
+    }
+    .auto-improvements li.muted::before {
+      content: "—"; color: var(--pico-muted-color); font-weight: 400;
+    }
+    .auto-improvements li.muted {
+      color: var(--pico-muted-color);
+    }
+    .auto-improvements .note {
+      margin: 0.5rem 0 0; font-size: 0.78em;
+      color: var(--pico-muted-color); line-height: 1.45;
+    }
+
     /* Onboarding wizard layout — vertical stack of "step" cards with
        a numbered badge in each header. Same Pico baseline as the rest
        of the app, just visually grouped so the user can tell they're

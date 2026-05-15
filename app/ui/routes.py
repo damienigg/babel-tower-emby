@@ -106,47 +106,36 @@ templates.env.globals["app_version"] = __version__
 
 _SECTION_META: dict[str, str] = {
     "Media server": (
-        "START HERE — without a working media server connection nothing else "
-        "is reachable. Pick your server type, paste its URL + API key (X-Plex-"
-        "Token for Plex), save. The Library tab lights up once this section "
-        "is configured."
+        "START HERE — without this filled in, the Library tab stays empty. "
+        "Pick your server type, paste its URL + API key, save."
     ),
     "Defaults": (
-        "Pre-set choices applied when you click 'Subtitle this' or 'Subtitle "
-        "selected' in the Library without overrides. The provider lives in the "
-        "Translation section below."
+        "Pre-set choices applied when you click 'Subtitle this' / 'Subtitle "
+        "selected' in the Library without per-job overrides."
     ),
     "Speech-to-Text": (
-        "Whisper transcribes audio to text. ALWAYS FREE — runs 100% locally, "
-        "model is downloaded once. The trade-off here is compute time × quality "
-        "× disk space, NOT money."
+        "Whisper transcribes audio to text — always free, fully local. "
+        "Trade-off is compute time × quality × disk space, not money."
     ),
     "Translation": (
-        "Pick the translation provider, then configure its specific knobs. "
-        "Provider is the main cost/quality lever — NLLB is fully free and "
-        "local, DeepL is freemium cloud, LLM uses whatever you wire up in the "
-        "Translation model section below (local Ollama, cloud Claude / GPT, "
-        "anything in between)."
+        "Pick the translation provider. NLLB is fully free and local, "
+        "DeepL is freemium cloud, LLM uses whatever you wire up below."
     ),
     "Translation model": (
-        "The LLM that translates subtitle cues (only used when provider=llm). "
-        "Configure cloud (Anthropic / OpenAI / OpenRouter / …) or fully local "
-        "(Ollama / LM Studio / LocalAI / vLLM) — Subtitle This doesn't care which."
+        "LLM that translates subtitle cues — only used when provider = LLM. "
+        "Works with cloud (Anthropic / OpenAI / OpenRouter / …) or local "
+        "(Ollama / LM Studio / LocalAI / vLLM)."
     ),
     "Subtitles": (
-        "WebVTT line-wrap formatting."
+        "WebVTT line-wrap + readability polish. Defaults match pro subtitle norms."
     ),
     "Resource safety": (
-        "Caps that keep a single job from consuming the host. The defaults are "
-        "sized for a 2 h film on a 6 GB / 4 vCPU container. Combine these with "
-        "the cgroup limits in docker-compose.yml — the kernel limits are the "
-        "actual fence; the in-process caps reduce the chance of ever hitting it."
+        "Caps that prevent a single job from consuming the host. Defaults are "
+        "sized for a 2 h film on a 6 GB / 4 vCPU container."
     ),
     "Security": (
-        "Optional HTTP Basic auth in front of the whole app. OFF by default "
-        "for the zero-config first-boot experience. Turn ON on any network "
-        "where you wouldn't trust every device to start jobs or read your "
-        "API keys."
+        "Optional HTTP Basic auth in front of the whole app. Turn ON on any "
+        "network where you wouldn't trust every device to consume your LLM quota."
     ),
 }
 
@@ -178,44 +167,45 @@ _FIELD_META: list[dict[str, Any]] = [
     {"key": "media_server_type", "section": "Media server",
      "label": "Server type", "type": "select",
      "options": [
-         {"value": "emby",
-          "label": "emby — Emby Server (the original)"},
-         {"value": "jellyfin",
-          "label": "jellyfin — Jellyfin (open-source fork of Emby; same REST API)"},
-         {"value": "plex",
-          "label": "plex — Plex Media Server (different API + auth, uses X-Plex-Token)"},
+         {"value": "emby",  "label": "Emby", "default": True},
+         {"value": "jellyfin", "label": "Jellyfin (Emby-compatible API)"},
+         {"value": "plex",  "label": "Plex (different API + auth)"},
      ],
-     "help": "Which media server you're talking to. Emby and Jellyfin share an "
-             "implementation (their REST APIs are functionally identical — Jellyfin keeps "
-             "Emby's /Items, /System/Info/Public endpoints and the X-Emby-Token auth header). "
-             "Plex has its own client (X-Plex-Token auth, /library/sections + "
-             "/library/metadata/{ratingKey} endpoints)."},
+     "summary": "Which media server you connect to.",
+     "details": "Emby and Jellyfin share an implementation — their REST APIs are "
+                "functionally identical (Jellyfin keeps Emby's /Items, /System/Info/Public "
+                "endpoints and the X-Emby-Token auth header). Plex uses a different client: "
+                "X-Plex-Token auth, /library/sections + /library/metadata/{ratingKey} endpoints."},
     {"key": "media_server_url", "section": "Media server",
      "label": "Server URL", "type": "text",
-     "help": "Where Subtitle This reaches your media server. Examples: "
-             "http://emby:8096 (docker-compose service name), "
-             "http://jellyfin:8096, "
-             "http://plex:32400 (Plex's default port), "
-             "or http://192.168.1.10:8096 (LAN IP)."},
+     "summary": "Where Subtitle This reaches your media server.",
+     "details": "Examples:\n"
+                "• http://emby:8096 (docker-compose service name)\n"
+                "• http://jellyfin:8096\n"
+                "• http://plex:32400 (Plex's default port)\n"
+                "• http://192.168.1.10:8096 (LAN IP)"},
     {"key": "media_server_api_key", "section": "Media server",
      "label": "API key (Plex: X-Plex-Token)", "type": "password",
-     "help": "For Emby: generate at Emby admin → Server Settings → Advanced → API Keys. "
-             "For Jellyfin: same path — Dashboard → API Keys. "
-             "For Plex: this is your X-Plex-Token (find it on plex.tv/account → "
-             "Authorized Devices, or sign in once and grab it from any local-server URL "
-             "in your browser)."},
+     "summary": "Credential used to call your media server's API.",
+     "details": "Where to find it:\n"
+                "• Emby: admin → Server Settings → Advanced → API Keys\n"
+                "• Jellyfin: Dashboard → API Keys\n"
+                "• Plex: plex.tv/account → Authorized Devices, or copy the X-Plex-Token "
+                "from a logged-in server URL in your browser."},
     {"key": "media_server_verify_ssl", "section": "Media server",
      "label": "Verify SSL certificate (TLS)", "type": "checkbox",
-     "help": "Leave ON when your Server URL is plain http:// (the toggle is ignored) "
-             "OR when it's https:// with a publicly-trusted certificate (Let's Encrypt "
-             "behind Caddy/Nginx, etc.). Turn OFF for: Plex accessed via LAN IP (the "
-             "bundled cert is for *.plex.direct so the hostname doesn't match), "
-             "Emby/Jellyfin behind a self-signed cert, or any homelab reverse proxy "
-             "without a CA-issued cert. Disabling verification means an attacker on "
-             "your network could MITM the traffic between this container and the media "
-             "server — only do it on a trusted LAN. Advanced alternative: keep this ON "
-             "and mount a custom CA bundle into the container, then set "
-             "SSL_CERT_FILE=/path/to/ca.crt in the env — httpx picks it up automatically."},
+     "summary": "Leave ON unless your server uses a self-signed certificate.",
+     "details": "Leave ON when your Server URL is plain http:// (toggle is ignored) OR when "
+                "it's https:// with a publicly-trusted certificate (Let's Encrypt behind "
+                "Caddy/Nginx, etc.).\n\n"
+                "Turn OFF for:\n"
+                "• Plex via LAN IP (its bundled cert is for *.plex.direct — hostname won't match)\n"
+                "• Emby/Jellyfin behind a self-signed cert\n"
+                "• Any homelab reverse-proxy without a CA-issued cert\n\n"
+                "Disabling verification means an attacker on your network could MITM the "
+                "traffic between this container and the media server — only do it on a "
+                "trusted LAN. Advanced alternative: keep this ON and mount a custom CA "
+                "bundle into the container, then set SSL_CERT_FILE=/path/to/ca.crt in env."},
 
     # ── Defaults — workflow knobs ─────────────────────────────────────────────
     # Per-job overrides for target language, mode, and skip behavior. The
@@ -224,9 +214,10 @@ _FIELD_META: list[dict[str, Any]] = [
     {"key": "default_target_lang", "section": "Defaults",
      "label": "Default target language", "type": "select",
      "options": _LANGUAGE_DROPDOWN_OPTIONS,
-     "help": "Language you want subtitles in. Used when you don't override per-job. "
-             "Coverage varies by translation provider — NLLB and DeepL support ~30 "
-             "languages well; LLM providers handle whatever the underlying model knows."},
+     "summary": "Language you want subtitles in (used when no per-job override).",
+     "details": "Coverage varies by translation provider:\n"
+                "• NLLB and DeepL support ~30 languages well\n"
+                "• LLM providers handle whatever the underlying model knows"},
     # NOTE: default_source_lang_priority is intentionally not exposed.
     # Hard-coded default ['en', '*'] in _EnvSettings handles 99% of cases.
     # Power users can override via BABEL_DEFAULT_SOURCE_LANG_PRIORITY.
@@ -234,26 +225,26 @@ _FIELD_META: list[dict[str, Any]] = [
     # below — the provider chooser belongs with the knobs it gates.
     {"key": "default_skip_if_target_audio_exists", "section": "Defaults",
      "label": "Skip when target-language audio is already present", "type": "checkbox",
-     "help": "If the file already has audio in the target language, do nothing. Saves "
-             "compute on items where the user can just switch audio track in their player."},
+     "summary": "Saves compute when the file already has an audio track in the target language.",
+     "details": "If the file already has audio in the target language, do nothing — the "
+                "user can just switch audio track in their player."},
     {"key": "write_detected_language_to_file", "section": "Defaults",
      "label": "Tag detected source language back into the source file (MKV only)", "type": "checkbox",
-     "help": "When a film's audio track has no language tag (Emby just shows 'Audio'), "
-             "language detection runs differently per backend: the OpenVINO STT backend "
-             "needs a Whisper-tiny pre-pass on the first 30s of audio (it can't surface "
-             "its own auto-detection through the optimum-intel API), while the CPU/"
-             "faster-whisper backend detects internally during the main transcribe call "
-             "at zero extra cost. Either way the transcription gets the right language. "
-             "With this checkbox ON, we ALSO write the detected language back into the "
-             "file's EBML header via `mkvpropedit` — instant, modifies only metadata, "
-             "NEVER touches the audio/video data sections. Restricted to MKV/MKA/WebM. "
-             "Non-Matroska containers (MP4/MOV/AVI/...) are deliberately left untouched: "
-             "an ffmpeg remux would technically preserve audio byte-for-byte but rewrites "
-             "the whole file with documented edge cases (timestamp re-derivation, lost "
-             "custom metadata) — not worth the risk on a media library. Detection still "
-             "drives transcription correctness regardless of container; only the persist-"
-             "to-Emby step is skipped for non-MKV. Turn off entirely to keep all source "
-             "files completely pristine."},
+     "summary": "Writes the detected ISO language into the source file's MKV header (Matroska only — instant, no remux).",
+     "details": "When a film's audio track has no language tag (Emby just shows 'Audio'), "
+                "language detection runs differently per backend:\n"
+                "• OpenVINO needs a Whisper-tiny pre-pass on the first 30 s (can't surface "
+                "its own auto-detection through the optimum-intel API)\n"
+                "• CPU/faster-whisper detects internally during the main transcribe call\n\n"
+                "Either way the transcription gets the right language. With this checkbox "
+                "ON, we ALSO write the detected language back into the file's EBML header "
+                "via mkvpropedit — instant, modifies only metadata, NEVER touches the "
+                "audio/video data sections. Restricted to MKV/MKA/WebM.\n\n"
+                "Non-Matroska containers (MP4/MOV/AVI/...) are deliberately left untouched: "
+                "an ffmpeg remux would technically preserve audio byte-for-byte but "
+                "rewrites the whole file with documented edge cases (timestamp "
+                "re-derivation, lost custom metadata) — not worth the risk on a media "
+                "library. Turn this off entirely to keep all source files pristine."},
 
     # ── Vocal isolation (Demucs) ──────────────────────────────────────────────
     # Single user-facing knob. The model identifier (htdemucs vs
@@ -263,103 +254,101 @@ _FIELD_META: list[dict[str, Any]] = [
      "label": "Vocal isolation (Demucs)",
      "type": "select",
      "options": [
-         {"value": "off",
-          "label": "OFF — skip the phase, feed raw audio to Whisper"},
-         {"value": "chunked",
-          "label": "CHUNKED — isolate vocals in chunks (safe RAM, recommended)"},
-         {"value": "full",
-          "label": "FULL — isolate the whole audio at once (best quality, needs ≥12 GB RAM)"},
+         {"value": "off",     "label": "OFF — skip the phase", "default": True},
+         {"value": "chunked", "label": "CHUNKED — safe RAM, recommended when ON"},
+         {"value": "full",    "label": "FULL — needs ≥ 12 GB free RAM"},
      ],
-     "help": "Splits the source audio into stems and feeds only the "
-             "VOCALS stem to Whisper. Score, ambience, and SFX are "
-             "removed so Whisper transcribes a clean speech signal. "
-             "Closes most of the 'climax dialog buried under music' "
-             "gap on action/sci-fi films (Inception, Dunkirk, Tenet). "
-             "\n\n"
-             "OFF — no isolation. Best for dialog-driven dramas with "
-             "sparse music where the gain wouldn't justify the cost.\n\n"
-             "CHUNKED — recommended. Processes the audio in 5-minute "
-             "chunks, capping peak RAM at ~1 GB regardless of film "
-             "length. The sub-second seam artifacts between chunks are "
-             "invisible to Whisper (it resyncs every 30s window). Safe "
-             "on a 6 GB cgroup.\n\n"
-             "FULL — processes the whole film in one apply_model call. "
-             "Slightly cleaner separation (no seam artifacts at all), "
-             "but peak RAM scales with film length × num_stems. A 2.5 h "
-             "4-stem run needs ~16 GB peak — only pick this if your "
-             "host has fat RAM headroom (32+ GB)."},
+     "summary": "OFF by default. Turn ON for action/sci-fi films where score buries dialogue (Inception, Dunkirk).",
+     "details": "Splits the source audio into stems and feeds only the VOCALS stem to "
+                "Whisper. Score, ambience, and SFX are removed so Whisper transcribes "
+                "a clean speech signal — closes most of the 'climax dialog buried under "
+                "music' gap on score-heavy films.\n\n"
+                "• OFF (default) — no isolation. Best for dialog-driven dramas with "
+                "sparse music where the gain wouldn't justify the cost. Also automatic "
+                "for 5.1+ sources (center-channel extraction does the job for free).\n"
+                "• CHUNKED — recommended when ON. Processes audio in 5-min chunks, "
+                "capping peak RAM at ~1 GB regardless of film length. Sub-second seam "
+                "artifacts are invisible to Whisper (it resyncs every 30 s window).\n"
+                "• FULL — one apply_model pass over the whole audio. Slightly cleaner "
+                "separation (no seam artifacts), but peak RAM scales with film length "
+                "× num_stems. A 2.5 h 4-stem run needs ~16 GB peak — only pick this "
+                "if your host has 32+ GB free."},
     {"key": "vocal_isolation_chunk_seconds", "section": "Speech-to-Text",
      "label": "Chunk size (seconds)", "type": "number",
      "show_if": {"field": "vocal_isolation_mode", "equals": "chunked"},
-     "help": "How many seconds of audio to load and process per "
-             "Demucs pass. apply_model peak memory scales linearly "
-             "with this. 300 (5 min) is the default — caps peak at "
-             "~1 GB total, leaving plenty of room under a 6 GB cgroup. "
-             "Drop to 120 (2 min) if you're still seeing 'process "
-             "restarted' during isolating-vocals. Going below 60 "
-             "starts hurting separation quality near chunk boundaries."},
+     "summary": "How many seconds of audio per Demucs pass. Default 300 (5 min) caps peak RAM at ~1 GB.",
+     "details": "apply_model peak memory scales linearly with this value.\n\n"
+                "• 300 (default) — safe under a 6 GB cgroup\n"
+                "• 120 (2 min) — drop here if you still see 'process restarted' during "
+                "isolating-vocals\n"
+                "• < 60 — starts hurting separation quality near chunk boundaries"},
 
     # ── Speech-to-Text ────────────────────────────────────────────────────────
     {"key": "whisper_backend", "section": "Speech-to-Text",
      "label": "Backend", "type": "select",
      "options": [
-         {"value": "cpu",
-          "label": "cpu · [ANY HOST · slow] faster-whisper · 20–60 min for a 2h film on small/medium model"},
-         {"value": "openvino",
-          "label": "openvino · [INTEL iGPU · 5–10× faster] needs N305/N100/etc. host + openvino-flavored image"},
+         {"value": "cpu",      "label": "cpu — runs on any host", "default": True},
+         {"value": "openvino", "label": "openvino — Intel iGPU, 5–10× faster"},
      ],
-     "help": (
-         "• cpu uses faster-whisper, runs entirely on the CPU. INT8 quantization keeps it "
-         "tractable but slow. Works on any host.\n"
-         "• openvino exports Whisper to OpenVINO IR and runs inference on the Intel iGPU. "
-         "Only works in the openvino-flavored image with /dev/dri exposed (TrueNAS Scale "
-         "with N305/N100/iGPU-equipped Intel host).\n"
-         "Note even with openvino, several pipeline steps stay CPU-bound: ffmpeg audio "
-         "extraction, the language-detection pre-pass (faster-whisper-tiny on untagged "
-         "audio), and the FIRST run's IR conversion (5-30 min, one-off). 100% CPU during "
-         "those phases is normal."
-     )},
+     "summary": "Which Whisper runtime. cpu is universal; openvino needs an Intel iGPU + the openvino image.",
+     "details": "• cpu uses faster-whisper, runs entirely on the CPU. INT8 quantization "
+                "keeps it tractable but slow.\n"
+                "• openvino exports Whisper to OpenVINO IR and runs inference on the "
+                "Intel iGPU. Only works in the openvino-flavored image with /dev/dri "
+                "exposed (TrueNAS Scale with an N305/N100/iGPU-equipped Intel host).\n\n"
+                "Note: even with openvino, several pipeline steps stay CPU-bound — "
+                "ffmpeg audio extraction, the language-detection pre-pass, and the "
+                "first run's IR conversion (5–30 min, one-off). 100 % CPU during those "
+                "phases is normal.\n\n"
+                "The cpu backend ALSO unlocks per-word timestamps + the confidence-"
+                "gated re-transcription pass (see the auto-improvements banner above)."},
     {"key": "whisper_model", "section": "Speech-to-Text", "label": "Whisper model", "type": "select",
      "options": [
-         {"value": "tiny",           "label": "tiny · [~75 MB · fastest · low quality] for quick smoke tests only"},
-         {"value": "base",           "label": "base · [~150 MB · fast · ok quality]"},
-         {"value": "small",          "label": "small · [~500 MB · balanced · good quality] ← default"},
-         {"value": "medium",         "label": "medium · [~1.5 GB · slow · great quality]"},
-         {"value": "large-v3",       "label": "large-v3 · [~3 GB · slowest · best quality]"},
-         {"value": "large-v3-turbo", "label": "large-v3-turbo · [~1.5 GB · fast for size · near-best quality, ~2× faster than large-v3]"},
+         {"value": "tiny",           "label": "tiny — ~75 MB · smoke tests"},
+         {"value": "base",           "label": "base — ~150 MB · fast, ok quality"},
+         {"value": "small",          "label": "small — ~500 MB · balanced", "default": True},
+         {"value": "medium",         "label": "medium — ~1.5 GB · great quality"},
+         {"value": "large-v3",       "label": "large-v3 — ~3 GB · best quality, slowest"},
+         {"value": "large-v3-turbo", "label": "large-v3-turbo — ~1.5 GB · near-best, ~2× faster than large-v3"},
      ],
-     "help": "Larger = better but slower and more disk. All sizes are free and local — "
-             "Whisper has no API cost. First-time use of a model triggers a one-off "
-             "download to /cache."},
+     "summary": "Bigger = better but slower and more RAM. All sizes are free and local.",
+     "details": "Whisper has no API cost — all model sizes run locally. First use of a "
+                "model triggers a one-off download to /cache.\n\n"
+                "Quality jumps:\n"
+                "• tiny → base: notable\n"
+                "• base → small: notable (the most common sweet-spot)\n"
+                "• small → medium: moderate\n"
+                "• medium → large-v3: small but real\n"
+                "Pick the largest that fits in your RAM budget."},
     {"key": "whisper_compute_type", "section": "Speech-to-Text",
      "label": "Compute type", "type": "select",
      "show_if": {"field": "whisper_backend", "equals": "cpu"},
      "options": [
-         {"value": "int8",    "label": "int8 · [recommended · ~500 MB resident for small, ~1.5 GB for medium]"},
-         {"value": "int16",   "label": "int16 · [~1 GB / ~3 GB · marginal precision gain over int8]"},
-         {"value": "float16", "label": "float16 · [~1 GB / ~3 GB · same RAM as int16, slower]"},
-         {"value": "float32", "label": "float32 · [~2 GB / ~6 GB · QUALITY MODE — only on hosts with 16+ GB RAM]"},
+         {"value": "int8",    "label": "int8 — ~500 MB / ~1.5 GB resident", "default": True},
+         {"value": "int16",   "label": "int16 — ~1 GB / ~3 GB · marginal gain"},
+         {"value": "float16", "label": "float16 — ~1 GB / ~3 GB · slower than int16"},
+         {"value": "float32", "label": "float32 — QUALITY MODE · 16+ GB RAM only"},
      ],
-     "help": "Quantization for faster-whisper.\n\n"
-             "int8 (default) is the right answer for 99 % of users: balances "
-             "RAM, speed, and quality. Subtitle-level WER differences vs. "
-             "float32 are below the noise floor on most films.\n\n"
-             "float32 is the QUALITY MODE — full-precision weights, ~4× more "
-             "RAM than int8 (~2 GB for small Whisper, ~6 GB for medium, "
-             "~12 GB for large-v3). Only pick this on a fat host (16+ GB "
-             "free); on TrueNAS's typical 6 GB cgroup it'll OOM-kill the "
-             "container at model-load time. The WER improvement over int8 "
-             "is real but small (~5-10 % relative) — generally not worth "
-             "the RAM cost unless you're optimising for festival-grade "
-             "output and have headroom to burn."},
+     "summary": "int8 (default) is right for 99 % of users — best balance of RAM, speed, and quality.",
+     "details": "Quantization for faster-whisper. Resident-RAM figures below are for the "
+                "small / medium model:\n\n"
+                "• int8 (default) — balances RAM, speed, quality. Subtitle-level WER vs. "
+                "float32 is below the noise floor on most films.\n"
+                "• int16 — marginal precision gain over int8; rarely worth the doubled RAM.\n"
+                "• float16 — same RAM as int16 but slower on CPU. Mostly for CUDA paths.\n"
+                "• float32 — full-precision weights, ~4× int8 RAM (~2 GB small, ~6 GB "
+                "medium, ~12 GB large-v3). Only pick this on a fat host (16+ GB free); "
+                "TrueNAS's typical 6 GB cgroup will OOM-kill the container at model-load. "
+                "WER improvement over int8 is real but small (~5–10 % relative) — not "
+                "worth the RAM cost unless you're optimising for festival-grade output."},
     {"key": "whisper_device", "section": "Speech-to-Text",
      "label": "Device", "type": "select",
      "show_if": {"field": "whisper_backend", "equals": "cpu"},
      "options": [
-         {"value": "cpu",  "label": "cpu · [universal] works on any host"},
-         {"value": "cuda", "label": "cuda · [NVIDIA GPU] needs nvidia-container-toolkit (rare on TrueNAS)"},
+         {"value": "cpu",  "label": "cpu — works on any host", "default": True},
+         {"value": "cuda", "label": "cuda — needs an NVIDIA GPU + nvidia-container-toolkit"},
      ],
-     "help": "Where faster-whisper runs. cuda only matters if you've added an NVIDIA GPU."},
+     "summary": "Where faster-whisper runs. cuda only matters if you've added an NVIDIA GPU."},
     # openvino_device removed from the UI: AUTO is always the right
     # answer (it picks GPU when available, falls back to CPU silently).
     # Explicit GPU/CPU forcing confused users more than it helped.
@@ -367,34 +356,29 @@ _FIELD_META: list[dict[str, Any]] = [
     {"key": "stt_region_packing", "section": "Speech-to-Text",
      "label": "Region packing (OpenVINO) — fast mode", "type": "checkbox",
      "show_if": {"field": "whisper_backend", "equals": "openvino"},
-     "help": "ON (default, fast): groups many short speech bits into a single "
-             "Whisper transcription pass. Drastically faster — a 2 h film "
-             "takes ~10 minutes on an Intel iGPU. The trade-off is that "
-             "Whisper can occasionally lose track of timing when too many "
-             "bits are bundled, which used to lose dialog. Mitigated since "
-             "0.7.11 by the density cap (see field below) and snap recovery; "
-             "in practice ON now produces near-OFF accuracy on most films.\n"
-             "\n"
-             "OFF (slow, max accuracy): each speech segment gets its own "
-             "Whisper pass. Same 2 h film now takes ~1.5-2 hours of "
-             "transcription on the same iGPU — roughly 10× slower. Turn OFF "
-             "only when ON is still missing visible dialog after tuning the "
-             "density cap.\n"
-             "\n"
-             "Ignored on the CPU/faster-whisper backend (it has its own "
-             "longform batching)."},
+     "summary": "ON groups many short speech bits into one Whisper pass — 10× faster, near-identical accuracy.",
+     "details": "ON (default, fast): groups many short speech bits into a single Whisper "
+                "transcription pass. A 2 h film takes ~10 minutes on an Intel iGPU. The "
+                "trade-off is that Whisper can occasionally lose track of timing when too "
+                "many bits are bundled, which used to lose dialog. Mitigated since 0.7.11 "
+                "by the density cap (see field below) and snap recovery — in practice ON "
+                "now produces near-OFF accuracy on most films.\n\n"
+                "OFF (slow, max accuracy): each speech segment gets its own Whisper pass. "
+                "The same 2 h film now takes ~1.5–2 h of transcription on the same iGPU — "
+                "roughly 10× slower. Turn OFF only when ON is still missing visible dialog "
+                "after tuning the density cap.\n\n"
+                "Ignored on the cpu/faster-whisper backend (it has its own longform batching)."},
     {"key": "stt_max_regions_per_window", "section": "Speech-to-Text",
      "label": "Region packing — max regions per pass", "type": "number",
      "show_if": {"field": "whisper_backend", "equals": "openvino"},
-     "help": "Hard cap on how many short speech bits get bundled into one "
-             "Whisper pass. Lower = more accurate timing (less risk of "
-             "losing dialog), slower transcription. Higher = faster, more "
-             "risk.\n"
-             "\n"
-             "Reference points: 4 (default, recommended), 8 (faster, "
-             "still safe with snap recovery), 0 (no cap — legacy "
-             "pre-0.7.11 behavior, drops ~40 % of dialog on dense films). "
-             "Most users should leave this alone."},
+     "summary": "Density cap. Default 4 is safe; most users should leave this alone.",
+     "details": "Hard cap on how many short speech bits get bundled into one Whisper pass. "
+                "Lower = more accurate timing (less risk of losing dialog), slower "
+                "transcription. Higher = faster, more risk.\n\n"
+                "Reference points:\n"
+                "• 4 (default) — recommended\n"
+                "• 8 — faster, still safe with snap recovery\n"
+                "• 0 — no cap (legacy pre-0.7.11 behavior — drops ~40 % of dialog on dense films)"},
 
     # ── Translation (provider chooser + provider-specific params) ─────────────
     # The provider chooser lives at the top of this section so it gates the
@@ -404,208 +388,201 @@ _FIELD_META: list[dict[str, Any]] = [
     {"key": "default_translation_provider", "section": "Translation",
      "label": "Translation provider — pick your cost tier", "type": "select",
      "options": [
-         {"value": "nllb",
-          "label": "nllb · [FREE · LOCAL] Meta NLLB-200 · 200 langs · works on both image flavors · ~1.5 GB downloaded on first call"},
-         {"value": "deepl",
-          "label": "deepl · [FREE TIER 500k chars/mo · CLOUD beyond] best on EU/Asian pairs · ~30 langs · text-only"},
-         {"value": "llm",
-          "label": "llm · [VARIES] uses LLM configured below · free if local (Ollama) or paid if cloud · best quality"},
+         {"value": "nllb",  "label": "NLLB — FREE local · ~30 langs well · ~1.5 GB download", "default": True},
+         {"value": "deepl", "label": "DeepL — free 500k chars/mo, then paid · best on EU/Asian pairs"},
+         {"value": "llm",   "label": "LLM — best quality · free if local (Ollama) or paid (Claude/GPT/…)"},
      ],
-     "help": (
-         "Sorted from cheapest to most flexible:\n"
-         "• NLLB — fully free, local, no account, no key. Decent quality on ~30 well-supported "
-         "language pairs. Works on both image flavors (uses Intel iGPU via OpenVINO when "
-         "available, falls back to CPU torch otherwise — slower but no setup either way).\n"
-         "• DeepL — free 500k characters/month (~6 movies), then paid. Excellent quality on "
-         "European and East-Asian pairs. The DeepL API key field appears below when you pick this.\n"
-         "• LLM — uses whatever you configure in the Translation model section. Highest "
-         "quality, supports any language pair. Free if you point at local Ollama / LM Studio. "
-         "Paid per-token if you point at Anthropic / OpenAI / OpenRouter / etc."
-     )},
+     "summary": "Cheapest first. NLLB needs no account; DeepL has a free tier; LLM is the highest quality.",
+     "details": "• NLLB — fully free, local, no account, no key. Decent quality on ~30 "
+                "well-supported language pairs. Works on both image flavors (uses Intel "
+                "iGPU via OpenVINO when available, falls back to CPU torch otherwise — "
+                "slower but no setup either way).\n"
+                "• DeepL — free 500k characters/month (~6 movies), then paid. Excellent "
+                "quality on European and East-Asian pairs. The DeepL API key field "
+                "appears below when you pick this.\n"
+                "• LLM — uses whatever you configure in the Translation model section. "
+                "Highest quality, supports any language pair. Free if you point at local "
+                "Ollama / LM Studio. Paid per-token if you point at Anthropic / OpenAI / "
+                "OpenRouter / etc."},
     {"key": "nllb_model", "section": "Translation",
      "label": "NLLB model variant", "type": "select",
      "show_if": {"field": "default_translation_provider", "equals": "nllb"},
      "options": [
          {"value": "facebook/nllb-200-distilled-600M",
-          "label": "distilled-600M · [~1.5 GB · balanced] default · good quality · fast"},
+          "label": "distilled-600M — ~1.5 GB · balanced", "default": True},
          {"value": "facebook/nllb-200-distilled-1.3B",
-          "label": "distilled-1.3B · [~3 GB · better] noticeably better fluency · 2× slower"},
+          "label": "distilled-1.3B — ~3 GB · better fluency, 2× slower"},
          {"value": "facebook/nllb-200-1.3B",
-          "label": "1.3B · [~5 GB · alternative] non-distilled — slightly different quality profile"},
+          "label": "1.3B (non-distilled) — ~5 GB · slightly different quality profile"},
          {"value": "facebook/nllb-200-3.3B",
-          "label": "3.3B · [~7 GB · best · slow] highest quality · needs ~16 GB RAM · very slow on CPU"},
+          "label": "3.3B — ~7 GB · best · very slow on CPU, needs ~16 GB RAM"},
      ],
-     "help": "Meta NLLB-200 model size. Bigger = better translations but slower and more RAM. "
-             "First use of a variant downloads the weights (one-off, cached in /cache/nllb-models)."},
+     "summary": "Meta NLLB-200 size. Default 600M is the sweet spot; pick 1.3B for noticeably better fluency at 2× cost.",
+     "details": "Bigger = better translations but slower and more RAM. First use of a "
+                "variant downloads the weights (one-off, cached in /cache/nllb-models)."},
     {"key": "nllb_batch_size", "section": "Translation",
      "label": "Cues per NLLB batch", "type": "number",
      "show_if": {"field": "default_translation_provider", "equals": "nllb"},
-     "help": "Only used when provider=NLLB. Higher = fewer model.generate() calls, "
-             "lower = less peak RAM per call (the KV cache scales with batch × "
-             "seq_len). Default 4 is tuned conservatively for NLLB-1.3B + a 12 GB "
-             "cgroup with Whisper-large page cache lingering; bump to 8-16 if you "
-             "use the 600M variant or have more memory headroom."},
+     "summary": "Default 4 is conservative for NLLB-1.3B in 12 GB. Bump to 8–16 on the 600M variant.",
+     "details": "Higher = fewer model.generate() calls; lower = less peak RAM per call (the "
+                "KV cache scales with batch × seq_len). Default 4 is tuned for NLLB-1.3B + "
+                "a 12 GB cgroup with Whisper-large page cache lingering."},
     {"key": "nllb_load_in_8bit", "section": "Translation",
      "label": "Compress NLLB weights to int8 (OpenVINO path)", "type": "checkbox",
      "show_if": {"field": "default_translation_provider", "equals": "nllb"},
-     "help": "Halves resident weight memory by quantizing to int8 via NNCF at "
-             "load time (~3 GB → ~1.5 GB for distilled-1.3B). First-time load "
-             "pays a 1-2 min quantization cost; the result is cached on disk. "
-             "Quality cost is roughly 0.3 BLEU — below the noise floor for "
-             "subtitle work. Default ON because the 1.3B variant otherwise "
-             "doesn't fit in 12 GB of cgroup alongside Whisper's page cache. "
-             "Turn OFF only if you have 16+ GB headroom and want strict "
-             "full-precision weights. No effect on the CPU/torch fallback path."},
+     "summary": "Halves NLLB resident RAM. ON by default — quality drop is below the noise floor.",
+     "details": "Quantizes weights to int8 via NNCF at load time (~3 GB → ~1.5 GB for "
+                "distilled-1.3B). First-time load pays a 1–2 min quantization cost; the "
+                "result is cached on disk. Quality cost is roughly 0.3 BLEU — below the "
+                "noise floor for subtitle work.\n\n"
+                "Default ON because the 1.3B variant otherwise doesn't fit in 12 GB of "
+                "cgroup alongside Whisper's page cache. Turn OFF only if you have 16+ GB "
+                "headroom and want strict full-precision weights. No effect on the CPU/"
+                "torch fallback path."},
     {"key": "deepl_batch_size", "section": "Translation",
      "label": "Cues per DeepL request", "type": "number",
      "show_if": {"field": "default_translation_provider", "equals": "deepl"},
-     "help": "Only used when provider=DeepL. DeepL caps a single request at 50 "
-             "texts, so this is also the upper bound. Lower it for more granular "
-             "retry behavior at the cost of more round-trips."},
+     "summary": "Default 50 is DeepL's API maximum. Lower it for more granular retries at the cost of more round-trips."},
     {"key": "deepl_api_key", "section": "Translation",
      "label": "DeepL API key", "type": "password",
      "show_if": {"field": "default_translation_provider", "equals": "deepl"},
-     "help": "Required when provider = DeepL. Free-tier keys end in ':fx' "
-             "(auto-detected — Babel routes to api-free.deepl.com vs api.deepl.com). "
-             "Sign up at https://www.deepl.com/pro-api — Free plan gives 500k chars/month."},
+     "summary": "Required when provider = DeepL. Get one at deepl.com/pro-api (Free plan = 500k chars/month).",
+     "details": "Free-tier keys end in ':fx' (auto-detected — Babel routes to "
+                "api-free.deepl.com vs api.deepl.com)."},
 
     # ── Translation model (only used when provider=llm) ───────────────────────
     {"key": "translation_batch_size", "section": "Translation model",
      "label": "Cues per LLM batch", "type": "number",
-     "help": "Higher = fewer round-trips, lower = more granular failures and retries. "
-             "30 is a good balance. Only affects the LLM provider — NLLB and DeepL have "
-             "their own batch sizes in the Translation section above."},
+     "summary": "Default 30. Higher = fewer round-trips; lower = more granular retries on failure.",
+     "details": "Only affects the LLM provider — NLLB and DeepL have their own batch sizes "
+                "in the Translation section above."},
     {"key": "translation_llm_type", "section": "Translation model",
      "label": "Wire protocol", "type": "select",
      "options": [
-         {"value": "openai_compat",
-          "label": "openai_compat · [universal] OpenAI · Ollama · LM Studio · LocalAI · OpenRouter · Together · Groq · DeepSeek · Zhipu · Gemini-compat · vLLM · llama.cpp"},
-         {"value": "anthropic",
-          "label": "anthropic · [Claude only] adds prompt caching, adaptive thinking, strict JSON-schema enforcement"},
+         {"value": "openai_compat", "label": "openai_compat — universal (OpenAI, Ollama, LM Studio, OpenRouter, …)"},
+         {"value": "anthropic",     "label": "anthropic — Claude only (adds prompt caching + adaptive thinking)", "default": True},
      ],
-     "help": "Pick `openai_compat` for everything except Claude — it's the universal Chat-"
-             "Completions protocol and covers all local servers + most cloud providers. Pick "
-             "`anthropic` ONLY when the Model field is a Claude variant (you get extra "
-             "Anthropic-only features that way)."},
+     "summary": "Pick anthropic ONLY when the Model field is a Claude variant; otherwise pick openai_compat.",
+     "details": "• openai_compat — universal Chat-Completions protocol; covers all local "
+                "servers and most cloud providers (OpenAI, OpenRouter, Together, Groq, "
+                "DeepSeek, Zhipu, Gemini-compat, vLLM, llama.cpp, Ollama, LM Studio, "
+                "LocalAI).\n"
+                "• anthropic — Claude only. You get prompt caching, adaptive thinking, "
+                "and strict JSON-schema enforcement that the openai_compat path can't "
+                "express."},
     {"key": "translation_llm_model", "section": "Translation model",
      "label": "Model", "type": "text",
-     "help": "What makes a good translator: large parameter count, broad multilingual "
-             "training, strong instruction-following.\n"
-             "• Frontier cloud (paid): claude-opus-4-7, gpt-4o, gemini-1.5-pro, mistral-large.\n"
-             "• Frontier open-source (free if local): qwen2.5:72b, deepseek-v3, llama3.1:70b, "
-             "glm-4-flash, command-r-plus.\n"
-             "• Cheap & fast: claude-haiku-4-5, gpt-4o-mini, qwen2.5:14b, llama3.1:8b, gemma2:9b."},
+     "summary": "Model identifier. Pick a large multilingual, instruction-following model.",
+     "details": "Suggestions by tier:\n"
+                "• Frontier cloud (paid): claude-opus-4-7, gpt-4o, gemini-1.5-pro, mistral-large\n"
+                "• Frontier open-source (free if local): qwen2.5:72b, deepseek-v3, "
+                "llama3.1:70b, glm-4-flash, command-r-plus\n"
+                "• Cheap & fast: claude-haiku-4-5, gpt-4o-mini, qwen2.5:14b, llama3.1:8b, gemma2:9b"},
     {"key": "translation_llm_endpoint", "section": "Translation model",
      "label": "Endpoint URL (only when wire protocol = openai_compat)", "type": "text",
-     "help": "Ignored when wire protocol = anthropic.\n"
-             "• Cloud: https://api.openai.com/v1 · https://openrouter.ai/api/v1 · "
-             "https://api.deepseek.com/v1 · https://open.bigmodel.cn/api/paas/v4 (Zhipu) · "
-             "https://generativelanguage.googleapis.com/v1beta/openai (Gemini-compat).\n"
-             "• Local (no API key needed): http://ollama:11434/v1 · http://lmstudio:1234/v1 · "
-             "http://localai:8080/v1 · http://host.docker.internal:1234/v1 (LM Studio on the "
-             "host machine when Babel runs in Docker)."},
+     "summary": "Where the OpenAI-compatible API lives. Ignored when wire protocol = anthropic.",
+     "details": "Cloud endpoints:\n"
+                "• https://api.openai.com/v1\n"
+                "• https://openrouter.ai/api/v1\n"
+                "• https://api.deepseek.com/v1\n"
+                "• https://open.bigmodel.cn/api/paas/v4 (Zhipu)\n"
+                "• https://generativelanguage.googleapis.com/v1beta/openai (Gemini-compat)\n\n"
+                "Local (no API key needed):\n"
+                "• http://ollama:11434/v1\n"
+                "• http://lmstudio:1234/v1\n"
+                "• http://localai:8080/v1\n"
+                "• http://host.docker.internal:1234/v1 (LM Studio on the host machine when Babel runs in Docker)"},
     {"key": "translation_llm_api_key", "section": "Translation model",
      "label": "API key (LEAVE BLANK for local servers)", "type": "password",
-     "help": "REQUIRED for cloud providers (Anthropic, OpenAI, OpenRouter, Together, Groq, "
-             "DeepSeek, Zhipu, Gemini, …). LEAVE BLANK for local servers (Ollama, LM Studio, "
-             "LocalAI) that don't authenticate by default — Babel substitutes a placeholder so "
-             "the OpenAI SDK is happy. Set a value only if you've explicitly enabled auth on "
-             "your local server (e.g. vLLM with --api-key)."},
+     "summary": "Required for cloud providers; LEAVE BLANK for local servers (Ollama / LM Studio / LocalAI).",
+     "details": "REQUIRED for cloud providers (Anthropic, OpenAI, OpenRouter, Together, "
+                "Groq, DeepSeek, Zhipu, Gemini, …).\n\n"
+                "LEAVE BLANK for local servers that don't authenticate by default — Babel "
+                "substitutes a placeholder so the OpenAI SDK is happy. Set a value only "
+                "if you've explicitly enabled auth on your local server (e.g. vLLM with "
+                "--api-key)."},
     # ── Subtitle formatting ───────────────────────────────────────────────────
     {"key": "max_line_chars", "section": "Subtitles",
      "label": "Max chars per line", "type": "number",
-     "help": "Standard subtitling guidelines suggest 40–42 for comfortable reading."},
+     "summary": "Default 42. Standard subtitling guidelines: 40–42 for comfortable reading."},
     {"key": "max_lines_per_cue", "section": "Subtitles",
      "label": "Max lines per cue", "type": "number",
-     "help": "Overflow merges into the last line — never drops content."},
+     "summary": "Default 2. Overflow merges into the last line — never drops content."},
     {"key": "polish_enabled", "section": "Subtitles",
      "label": "Readability polish (extend short cues, merge fragments)",
      "type": "checkbox",
-     "help": "Whisper outputs tight per-utterance timing — a 0.3 s "
-             "'Yes.' gets a 0.3 s cue, far too brief to read. With "
-             "this ON (default), a final pass extends cues to a "
-             "minimum display duration (capped to never overlap the "
-             "next cue) and optionally merges adjacent fragments "
-             "that visually read as one subtitle. Inception "
-             "comparison: raw Whisper had 42.8 % of cues under 1 s, "
-             "the pro reference SRT had 0. Defaults match the pro "
-             "shape closely. Turn OFF only if you want the raw "
-             "Whisper timing (e.g. for downstream tooling that "
-             "does its own readability pass)."},
+     "summary": "ON by default. Extends tight Whisper timings to readable durations and merges fragments.",
+     "details": "Whisper outputs tight per-utterance timing — a 0.3 s 'Yes.' gets a 0.3 s "
+                "cue, far too brief to read. With this ON (default), a final pass extends "
+                "cues to a minimum display duration (capped to never overlap the next cue) "
+                "and optionally merges adjacent fragments that visually read as one subtitle.\n\n"
+                "Inception comparison: raw Whisper had 42.8 % of cues under 1 s, the pro "
+                "reference SRT had 0. Defaults match the pro shape closely.\n\n"
+                "Turn OFF only if you want the raw Whisper timing (e.g. for downstream "
+                "tooling that does its own readability pass)."},
     {"key": "min_cue_duration_seconds", "section": "Subtitles",
      "label": "Min display duration (s)", "type": "number",
      "show_if": {"field": "polish_enabled", "equals": "true"},
-     "help": "Lower bound on how long any cue stays on screen, "
-             "regardless of utterance length. 1.2 s is the lower "
-             "end of pro subtitling norms; BBC guidelines allow "
-             "0.7-1.5 s, Netflix expects 5/6 s for single syllables. "
-             "Shorter cues are extended forward (never the start — "
-             "audio onset stays in sync)."},
+     "summary": "Default 1.2 s. Lower bound on how long any cue stays on screen.",
+     "details": "1.2 s sits at the lower end of pro subtitling norms (BBC: 0.7–1.5 s "
+                "minimum; Netflix: ~0.83 s minimum for single-syllable utterances). "
+                "Shorter cues are extended forward (never the start — audio onset stays "
+                "in sync)."},
     {"key": "min_seconds_per_char", "section": "Subtitles",
      "label": "Min reading speed (seconds per character)",
      "type": "number",
      "show_if": {"field": "polish_enabled", "equals": "true"},
-     "help": "Reading-speed cap. 0.045 s/char ≈ 22 chars/second, a "
-             "relaxed pace. A 40-character two-line cue claims at "
-             "least 40 × 0.045 = 1.8 s. Tighten (smaller value) for "
-             "faster readers, loosen for slower."},
+     "summary": "Default 0.045 s/char ≈ 22 chars/second — a relaxed reading pace.",
+     "details": "A 40-character two-line cue claims at least 40 × 0.045 = 1.8 s. Tighten "
+                "(smaller value) for faster readers; loosen for slower."},
     {"key": "merge_adjacent_cues", "section": "Subtitles",
      "label": "Merge adjacent short cues", "type": "checkbox",
      "show_if": {"field": "polish_enabled", "equals": "true"},
-     "help": "When two consecutive cues are visually one subtitle "
-             "(small gap between them, combined text fits in the "
-             "line-wrap budget), collapse them into one. Trims the "
-             "'flickery sequence of short fragments' effect Whisper "
-             "produces on quick back-and-forth dialog."},
+     "summary": "ON by default. Collapses two consecutive cues into one when they're visually a single subtitle.",
+     "details": "Conditions: small gap between them AND combined text fits in the line-wrap "
+                "budget AND combined duration stays under the merged-duration cap. Trims "
+                "the 'flickery sequence of short fragments' effect Whisper produces on "
+                "quick back-and-forth dialog."},
     {"key": "max_gap_to_merge_seconds", "section": "Subtitles",
      "label": "Max gap to merge (s)", "type": "number",
      "show_if": {"field": "merge_adjacent_cues", "equals": "true"},
-     "help": "Two cues are merge candidates only when the silence "
-             "between them is shorter than this. 0.3 s = a natural "
-             "breath in conversation. Above this they're treated as "
-             "separate utterances."},
+     "summary": "Default 0.3 s — about a natural breath in conversation. Above this, cues stay separate."},
     {"key": "max_merged_cue_duration_seconds", "section": "Subtitles",
      "label": "Max merged cue duration (s)", "type": "number",
      "show_if": {"field": "merge_adjacent_cues", "equals": "true"},
-     "help": "Hard cap on how long a single merged cue can be on "
-             "screen. Beyond this, a subtitle reads as cluttered "
-             "rather than coherent. 7 s is the standard upper bound."},
+     "summary": "Default 7 s — the standard upper bound. Past this a subtitle reads as cluttered."},
     {"key": "cue_separation_seconds", "section": "Subtitles",
      "label": "Min gap between cues (s)", "type": "number",
      "show_if": {"field": "polish_enabled", "equals": "true"},
-     "help": "Minimum silence kept between consecutive cues after "
-             "the polish pass extends durations. 0.05 s ≈ 1 frame "
-             "at 24 fps — invisible to the eye but prevents two "
-             "subtitles overlapping in renderers that handle the "
-             "overlap case clumsily."},
+     "summary": "Default 0.125 s ≈ 3 frames at 24 fps — the BBC / Netflix professional norm.",
+     "details": "Minimum silence kept between consecutive cues after the polish pass "
+                "extends durations. Prevents subtitles flashing one frame off (the "
+                "pre-0.7.33 default of 0.05 s technically worked but rendered as rushed "
+                "in side-by-side comparison with pro work)."},
 
     # ── Resource safety (advanced — sits at the bottom of the form) ─────────
     # These caps prevent a long film + heavy mode from consuming all host
     # RAM. They complement the cgroup limits in docker-compose.yml.
     {"key": "job_timeout_seconds", "section": "Resource safety",
      "label": "Job wall-clock timeout (seconds)", "type": "number",
-     "help": "Hard cap on a single job's runtime. 5400 = 90 min — generous for "
-             "a 3 h film at whisper-large on int8 CPU. Set to 0 to disable. "
-             "Enforced at every pipeline checkpoint (between audio segments, "
-             "between translation batches, between scene-detect ffmpeg lines) "
-             "so a wedged job can't hold the queue indefinitely."},
+     "summary": "Default 5400 (90 min) — generous for a 3 h film at whisper-large/int8. Set to 0 to disable.",
+     "details": "Enforced at every pipeline checkpoint (between audio segments, between "
+                "translation batches, etc.) so a wedged job can't hold the queue "
+                "indefinitely."},
     {"key": "stt_audio_segment_seconds", "section": "Resource safety",
      "label": "OpenVINO STT audio-segment size (seconds)", "type": "number",
-     "help": "How much audio is loaded into RAM at once for the OpenVINO "
-             "Whisper backend. 600 = 10 min, ~75 MB resident regardless of "
-             "film length. Lower values reduce RAM further; higher values "
-             "have fewer segment-boundary cue splits. Ignored when "
-             "whisper_backend = cpu (faster-whisper streams from disk on its own)."},
+     "summary": "Default 600 (10 min). Caps OpenVINO audio RAM at ~75 MB regardless of film length.",
+     "details": "Lower values reduce RAM further; higher values produce fewer segment-"
+                "boundary cue splits. Ignored when whisper_backend = cpu "
+                "(faster-whisper streams from disk on its own)."},
     # ── Security ────────────────────────────────────────────────────────────
     {"key": "auth_credentials", "section": "Security",
      "label": "HTTP Basic credentials (user:password)", "type": "password",
-     "help": "Leave BLANK for no auth (default — preserves zero-config first "
-             "boot). Set to 'user:password' to require Basic auth on every "
-             "endpoint except /health. Adds a same-origin check on POST/PATCH/"
-             "PUT/DELETE so a malicious LAN page can't ride your saved browser "
-             "credentials to start jobs. Apply this on any network where you "
-             "wouldn't trust every device — the Library page can queue jobs "
-             "that consume your LLM quota."},
+     "summary": "Blank = no auth (default). Set 'user:password' to require Basic auth on every endpoint except /health.",
+     "details": "Adds a same-origin check on POST/PATCH/PUT/DELETE so a malicious LAN "
+                "page can't ride your saved browser credentials to start jobs. Apply on "
+                "any network where you wouldn't trust every device — the Library page "
+                "can queue jobs that consume your LLM quota."},
 ]
 
 
@@ -1134,6 +1111,60 @@ def _field_warnings() -> dict[str, str]:
     return warnings
 
 
+def _auto_improvements() -> list[dict]:
+    """Pipeline improvements that run AUTOMATICALLY when conditions
+    are right. None of them has a setting to flip — the banner at
+    the top of the Settings page lists them so the user sees what's
+    already being done.
+
+    ``active`` indicates whether the current backend / source config
+    will actually exercise the feature; inactive entries render
+    dimmed so the list is honest about what's running NOW vs what
+    requires a different choice elsewhere in Settings."""
+    backend = settings.whisper_backend.lower()
+    is_cpu_backend = backend == "cpu"
+    return [
+        {
+            "name": "Center-channel extraction",
+            "detail": "5.1+ sources → ffmpeg pan=mono|c0=FC (dialogue-only audio)",
+            "active": True,
+        },
+        {
+            "name": "Loudness normalization",
+            "detail": "EBU R128 single-pass to −23 LUFS — brings audio into Whisper's training range",
+            "active": True,
+        },
+        {
+            "name": "Anti-hallucination filter",
+            "detail": "drops YouTube-tail signature phrases + n-gram stuck loops post-STT",
+            "active": True,
+        },
+        {
+            "name": "Confidence-gated re-transcription",
+            "detail": (
+                "re-decodes weak 10-min buckets with aggressive params (cpu backend only)"
+                if is_cpu_backend
+                else "requires Whisper backend = cpu (OpenVINO can't surface avg_logprob)"
+            ),
+            "active": is_cpu_backend,
+        },
+        {
+            "name": "Word-level timestamps",
+            "detail": (
+                "DTW alignment for frame-accurate per-word timing (cpu backend only)"
+                if is_cpu_backend
+                else "requires Whisper backend = cpu"
+            ),
+            "active": is_cpu_backend,
+        },
+        {
+            "name": "Orphan-word line breaks",
+            "detail": "VTT writer avoids ending a line on \"of\", \"the\", \"de\", \"la\", …",
+            "active": True,
+        },
+    ]
+
+
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
@@ -1145,6 +1176,7 @@ def settings_page(request: Request) -> HTMLResponse:
             "sensitive": SENSITIVE_FIELDS,
             "read_only": READ_ONLY_FIELDS,
             "field_warnings": _field_warnings(),
+            "auto_improvements": _auto_improvements(),
             "active": "settings",
             "saved": False,
         },
@@ -1184,6 +1216,7 @@ async def settings_save(request: Request) -> HTMLResponse:
             "sensitive": SENSITIVE_FIELDS,
             "read_only": READ_ONLY_FIELDS,
             "field_warnings": _field_warnings(),
+            "auto_improvements": _auto_improvements(),
             "active": "settings",
             "saved": error is None,
             "error": error,

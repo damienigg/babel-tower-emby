@@ -100,11 +100,19 @@ def test_settings_page_renders_with_cost_aware_labels(client):
     r = client.get("/settings")
     assert r.status_code == 200
     body = r.text
-    # Per-section descriptions still carry the cost framing
-    assert "ALWAYS FREE" in body                           # STT section
-    # Cost-aware option labels rendered in the dropdowns
-    assert "[FREE · LOCAL]" in body                        # nllb option
-    assert "[FREE TIER 500k chars/mo · CLOUD beyond]" in body   # deepl option
+    # Per-section descriptions still carry the cost framing on the
+    # Speech-to-Text section.
+    assert "free, fully local" in body.lower()
+    # Provider dropdown option labels still surface the cost story
+    # so a user picking a provider sees the price implication inline.
+    assert "FREE local" in body                            # nllb option
+    assert "free 500k" in body.lower()                     # deepl free tier
+    # The 0.8.2 collapsible help shape rendered correctly.
+    assert "field-summary" in body
+    assert "<details class=\"field-details\"" in body
+    # The auto-improvements banner appears with at least one entry.
+    assert "auto-improvements" in body
+    assert "Center-channel extraction" in body
     # The standalone hero card is gone.
     assert "hero-cost-ladder" not in body
 

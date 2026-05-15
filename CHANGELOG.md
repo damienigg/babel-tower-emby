@@ -7,6 +7,64 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-05-15
+
+Settings UI clarity pass. The growing pile of per-field help blobs
+had become a wall of text — users couldn't scan the form. Every
+field now renders a one-line summary always-visible and tucks the
+long rationale into a collapsible `<details>` block.
+
+### Added
+
+- **Active automatic improvements banner** at the top of `/settings`.
+  Lists the 6 pipeline features that run without any toggle (center-
+  channel extraction, EBU R128 loudnorm, anti-hallucination filter,
+  confidence-gated re-transcription, word-level timestamps, orphan-
+  word line breaks) so users see what's already being done for them
+  instead of hunting for switches that don't exist. Entries dim when
+  inactive for the current configuration (e.g. refine / word-timing
+  require `whisper_backend=cpu`).
+
+- **Per-field collapsible help** in `app/templates/settings.html`.
+  Each `_FIELD_META` entry now carries:
+  - `summary`: one short sentence visible inline (replaces the old
+    wall-of-text `help` block).
+  - `details`: optional long rationale rendered inside `<details>`,
+    collapsed by default.
+
+- **`default` marker** on recommended select options. The current
+  field's `<label>` carries a small `default` pill when the active
+  value matches the recommended option, and each option label
+  consistently appends `← default` to the recommended choice.
+
+### Changed
+
+- Section descriptions tightened to ≤ 2 sentences each so the page
+  scans top-to-bottom without re-reading.
+
+- `cue_separation_seconds` help no longer references the stale 0.05 s
+  pre-0.7.33 default — current default is 0.125 s (≈ 3 frames at
+  24 fps, the BBC/Netflix professional norm).
+
+- `min_cue_duration_seconds` help cleans up the cryptic "Netflix
+  expects 5/6 s for single syllables" wording to "~0.83 s for
+  single-syllable utterances".
+
+### Verified (no change)
+
+Defaults audit confirmed every shipping setting still produces a
+sensible run when the user touches nothing:
+
+- Pipeline: `vocal_isolation_mode=off`, `whisper_backend=cpu`,
+  `whisper_model=small`, `whisper_compute_type=int8`,
+  `vad_enabled=true` (openvino only).
+- Translation: `default_translation_provider=nllb`,
+  `nllb_model=distilled-600M`, `nllb_load_in_8bit=true`.
+- Polish: `polish_enabled=true`, `min_cue_duration_seconds=1.2`,
+  `merge_adjacent_cues=true`, `cue_separation_seconds=0.125`.
+- Safety: `job_timeout_seconds=5400`, `stt_audio_segment_seconds=600`,
+  `media_server_verify_ssl=true`.
+
 ## [0.8.1] — 2026-05-15
 
 Observability follow-up for 0.8.0 — every audio-mode quality

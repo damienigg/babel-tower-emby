@@ -21,6 +21,29 @@
     </article>
   {% endif %}
 
+  {% if auto_improvements %}
+  {# Banner: which pipeline features are running automatically — no
+     toggle to find, no setting to flip. Helps users see what's
+     already being done before they hunt the form for it. #}
+  <aside class="auto-improvements">
+    <h3>✨ Active automatic improvements</h3>
+    <ul>
+      {% for item in auto_improvements %}
+      <li class="{% if not item.active %}muted{% endif %}">
+        <strong>{{ item.name }}</strong>
+        {% if item.detail %}<span class="muted small"> — {{ item.detail }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="note">
+      These features run automatically when conditions are right and
+      do not have a setting to toggle. Items dimmed above are inactive
+      for the current configuration (e.g. require a different Whisper
+      backend or a specific source layout).
+    </p>
+  </aside>
+  {% endif %}
+
   <form method="post" action="/settings">
     {% for section, section_desc, section_show_if, fields in sections %}
     <section class="settings-section"
@@ -41,6 +64,27 @@
              value or a comma-separated list (any-of). The check runs
              on initial paint AND on change of any monitored field. #}
           {% set show_if = f.show_if %}
+          {# Per-field help is either the new {summary, details} split
+             (0.8.2+, preferred — short line + collapsible) or the legacy
+             f.help string (rendered as plain field-help). The two macros
+             below keep the conditional templating compact. #}
+          {% set summary_text = f.summary or f.help %}
+          {% set details_text = f.details %}
+          {# Whether the current value matches the recommended option —
+             drives the "[default]" pill on selects. f.options entries
+             that are dicts may carry a "default": true marker. Uses a
+             namespace because plain {% set %} inside {% for %} doesn't
+             leak the value back out (Jinja scoping). #}
+          {% set ns = namespace(default_value=none) %}
+          {% if f.type == 'select' and f.options %}
+            {% for opt in f.options %}
+              {% if opt is mapping and opt.get('default') %}
+                {% set ns.default_value = opt.value %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+          {% set is_at_default = (ns.default_value is not none) and (v == ns.default_value) %}
+
           {% if f.type == 'checkbox' %}
             <div id="field-{{ k }}" class="field-checkbox"
                  {% if show_if %}data-show-if-field="{{ show_if.field }}" data-show-if-equals="{{ show_if.equals_csv }}"{% endif %}>
@@ -54,17 +98,25 @@
                   ⚠️ {{ field_warnings.get(k) }}
                 </p>
               {% endif %}
-              {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
+              {% if summary_text %}<p class="field-summary">{{ summary_text }}</p>{% endif %}
+              {% if details_text %}
+                <details class="field-details">
+                  <summary>Details</summary>
+                  <div class="details-body">{{ details_text }}</div>
+                </details>
+              {% endif %}
             </div>
           {% else %}
             <div id="field-{{ k }}"
                  {% if show_if %}data-show-if-field="{{ show_if.field }}" data-show-if-equals="{{ show_if.equals_csv }}"{% endif %}>
-              <label for="{{ k }}">{{ f.label }}</label>
+              <label for="{{ k }}">
+                {{ f.label }}{% if is_at_default %}<span class="default-pill">default</span>{% endif %}
+              </label>
               {% if f.type == 'select' %}
                 <select id="{{ k }}" name="{{ k }}" {% if is_readonly %}disabled{% endif %}>
                   {% for opt in f.options %}
                     {% if opt is mapping %}
-                      <option value="{{ opt.value }}" {% if v == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                      <option value="{{ opt.value }}" {% if v == opt.value %}selected{% endif %}>{{ opt.label }}{% if opt.get('default') %} ← default{% endif %}</option>
                     {% else %}
                       <option value="{{ opt }}" {% if v == opt %}selected{% endif %}>{{ opt }}</option>
                     {% endif %}
@@ -82,7 +134,13 @@
                 {% endif %}
                 <input type="text" id="{{ k }}" name="{{ k }}" value="{{ v_text }}" {% if is_readonly %}readonly{% endif %}>
               {% endif %}
-              {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
+              {% if summary_text %}<p class="field-summary">{{ summary_text }}</p>{% endif %}
+              {% if details_text %}
+                <details class="field-details">
+                  <summary>Details</summary>
+                  <div class="details-body">{{ details_text }}</div>
+                </details>
+              {% endif %}
             </div>
           {% endif %}
         {% endfor %}
