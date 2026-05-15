@@ -1,8 +1,18 @@
 name: Publish container images
 
 on:
+  # Trigger only on release tags. Our release flow (see CHANGELOG +
+  # the saved memory rule "every release needs a GitHub tag") always
+  # pushes a v*.*.* tag right after `git push origin main`, so a single
+  # tag-triggered build covers every shippable commit. Adding
+  # `branches: [main]` here would double-build every release (one for
+  # the commit push, one for the tag push) since both refs point at
+  # the same SHA — wasteful and confusing in the Actions UI.
+  #
+  # If you need a build for a non-release commit (e.g. testing a WIP
+  # branch's Dockerfile changes), use the `workflow_dispatch` trigger
+  # below from the Actions tab.
   push:
-    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
 
@@ -69,8 +79,14 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Moving 'cpu' / 'openvino' pointer on the default branch
-            type=raw,value=${{ matrix.flavor }},enable={{is_default_branch}}
+            # Moving 'cpu' / 'openvino' pointer. Pre-0.7.29 this was
+            # gated on is_default_branch (i.e. main-branch pushes), but
+            # we dropped the main-branch trigger to kill the double-
+            # build. Since the workflow now only fires on release tags,
+            # bumping the moving tag unconditionally on every run is
+            # both correct (release tags ARE the moving target) and
+            # avoids `docker compose pull` getting a stale image.
+            type=raw,value=${{ matrix.flavor }}
             # Versioned tags on releases: v1.2.3 -> 1.2.3-cpu / 1.2.3-openvino
             type=semver,pattern={{version}},suffix=-${{ matrix.flavor }}
             type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.flavor }}
@@ -98,9 +114,12 @@ jobs:
     name: Prune old GHCR versions
     needs: build-and-push
     runs-on: ubuntu-latest
-    # Only prune on main-branch pushes — when the user tags a release we
-    # WANT to keep older versions around for reproducibility.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Run on every tag-triggered build (workflow_dispatch pruning would
+    # also be reasonable but we only run dispatch for one-off WIP
+    # tests, where we don't want pruning to happen).
+    # The ignore-versions regex below protects all release-tagged
+    # images, so this is safe to run on every release.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       packages: write
     steps:
@@ -117,6 +136,6 @@ jobs:
           min-versions-to-keep: ${{ fromJSON(env.KEEP_LATEST_N_VERSIONS) }}
           # Protect any release-tagged version (e.g. 1.2.3-cpu, 1.2-openvino)
           # from deletion — those are pinned references users may pull
-          # against and shouldn't disappear when a new main-branch build
+          # against and shouldn't disappear when a new release build
           # rolls in.
           ignore-versions: '^v?\d+\.\d+(\.\d+)?(-(cpu|openvino))?$'
