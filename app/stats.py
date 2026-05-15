@@ -190,15 +190,22 @@ def compute_from_vtt(
         from pathlib import Path
         stats.media_name = Path(media_path).name
 
-    # NOTE line: same shape as in the Cache Explorer. The optional
-    # ``polished=true`` group at the end is the 0.7.20+ marker —
-    # captured for surfacing on the stats page, absent on pre-0.7.20
-    # entries (in which case ``polished`` stays None and the UI
-    # renders "polish status unknown").
+    # NOTE line: same shape as in the Cache Explorer.
+    #
+    # The optional ``mode=`` group is the pre-0.7.32 marker. From
+    # 0.7.32 onward only the audio mode survives and the field was
+    # dropped from the NOTE header — making the group optional keeps
+    # the regex matching both legacy and new entries with a single
+    # pattern.
+    #
+    # The optional ``polished=true`` group at the end is the 0.7.20+
+    # marker — captured for surfacing on the stats page, absent on
+    # pre-0.7.20 entries (in which case ``polished`` stays None and
+    # the UI renders "polish status unknown").
     note_re = re.compile(
         r"NOTE Subtitle This auto-subs "
         r"\((?P<src>[a-z]{2}) -> (?P<tgt>[a-z]{2}), "
-        r"mode=(?P<mode>[a-z]+), "
+        r"(?:mode=(?P<mode>[a-z]+), )?"
         r"whisper=(?P<whisper>[^,]+), "
         r"provider=(?P<provider>[^,)]+)"
         r"(?:, polished=(?P<polished>true|false))?"
@@ -211,7 +218,9 @@ def compute_from_vtt(
         polished_g = m.group("polished")
         stats.polished = (polished_g == "true") if polished_g else None
         if stats.mode is None:
-            stats.mode = m.group("mode")
+            legacy_mode = m.group("mode")
+            if legacy_mode:
+                stats.mode = legacy_mode
         stats.whisper_model = m.group("whisper")
         stats.provider = m.group("provider")
 

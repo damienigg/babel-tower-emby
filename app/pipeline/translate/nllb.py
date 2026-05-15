@@ -147,13 +147,10 @@ class NLLBProvider:
         cues: list[Cue],
         source_lang: str,
         target_lang: str,
-        context=None,
         *,
         progress: Callable[[float], None] = _noop_progress,
         check_cancel: Callable[[], None] = _noop_cancel,
     ) -> list[Cue]:
-        # NLLB is text-only — `context` is silently ignored. The processor enforces
-        # that scene/cinematic modes use the LLM provider.
         try:
             model, tokenizer = _load()
 

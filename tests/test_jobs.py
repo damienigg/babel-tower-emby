@@ -6,7 +6,7 @@ from app import jobs
 def test_job_dataclass_to_dict_roundtrip():
     j = jobs.Job(
         id="abc", item_id="1", item_name="Movie",
-        target_lang="fr", provider="llm", mode="audio",
+        target_lang="fr", provider="llm",
     )
     d = j.to_dict()
     assert d["id"] == "abc"
@@ -20,9 +20,9 @@ def test_list_jobs_empty():
 
 
 def test_list_jobs_returns_newest_first():
-    j1 = jobs.Job(id="1", item_id="a", item_name="A", target_lang="fr", provider="llm", mode="audio")
+    j1 = jobs.Job(id="1", item_id="a", item_name="A", target_lang="fr", provider="llm")
     j1.queued_at = 100.0
-    j2 = jobs.Job(id="2", item_id="b", item_name="B", target_lang="fr", provider="llm", mode="audio")
+    j2 = jobs.Job(id="2", item_id="b", item_name="B", target_lang="fr", provider="llm")
     j2.queued_at = 200.0
     jobs._jobs[j1.id] = j1
     jobs._jobs[j2.id] = j2
@@ -40,7 +40,7 @@ def test_max_jobs_eviction(monkeypatch):
     # state directly to test eviction.
     for i in range(5):
         j = jobs.Job(id=f"j{i}", item_id="x", item_name="x",
-                      target_lang="fr", provider="llm", mode="audio")
+                      target_lang="fr", provider="llm")
         jobs._jobs[j.id] = j
         while len(jobs._jobs) > jobs.MAX_JOBS:
             jobs._jobs.popitem(last=False)
@@ -53,7 +53,7 @@ def test_update_progress_clamps_and_is_monotonic_within_stage():
     the same stage. update_progress enforces this so a mid-batch retry that
     reports a smaller fraction (e.g. one cue lands earlier than expected
     after a beam-search rerun) doesn't cause UI rubber-banding."""
-    j = jobs.Job(id="x", item_id="i", item_name="n", target_lang="fr", provider="llm", mode="audio")
+    j = jobs.Job(id="x", item_id="i", item_name="n", target_lang="fr", provider="llm")
     j.update_progress(40, "transcribing")
     j.update_progress(35, "transcribing")
     assert j.progress_pct == 40
@@ -71,7 +71,7 @@ def test_update_progress_clamps_and_is_monotonic_within_stage():
 
 
 def test_request_cancel_sets_canceling_status_when_running():
-    j = jobs.Job(id="x", item_id="i", item_name="n", target_lang="fr", provider="llm", mode="audio")
+    j = jobs.Job(id="x", item_id="i", item_name="n", target_lang="fr", provider="llm")
     j.status = "running"
     j.request_cancel()
     assert j.cancel_requested is True
@@ -81,7 +81,7 @@ def test_request_cancel_sets_canceling_status_when_running():
 def test_request_cancel_does_not_overwrite_terminal_status():
     """A user clicking cancel just as a job finishes shouldn't flip a
     succeeded/failed job back to 'canceling' — the work is done."""
-    j = jobs.Job(id="x", item_id="i", item_name="n", target_lang="fr", provider="llm", mode="audio")
+    j = jobs.Job(id="x", item_id="i", item_name="n", target_lang="fr", provider="llm")
     j.status = "succeeded"
     j.request_cancel()
     assert j.cancel_requested is True   # flag still set (idempotent / harmless)
@@ -89,7 +89,7 @@ def test_request_cancel_does_not_overwrite_terminal_status():
 
 
 def test_check_cancel_raises_only_when_requested():
-    j = jobs.Job(id="x", item_id="i", item_name="n", target_lang="fr", provider="llm", mode="audio")
+    j = jobs.Job(id="x", item_id="i", item_name="n", target_lang="fr", provider="llm")
     j.check_cancel()  # no-op when cancel not requested
     j.cancel_requested = True
     import pytest
@@ -106,7 +106,7 @@ def test_submit_without_main_loop_raises():
         with pytest.raises(RuntimeError, match="main loop"):
             jobs.submit(
                 item_id="1", item_name="x", target_lang="fr",
-                provider="llm", mode="audio",
+                provider="llm",
                 runner=lambda j: None,
             )
     finally:

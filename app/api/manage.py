@@ -16,7 +16,7 @@ _log = logging.getLogger("subtitle_this")
 from app import cache_explorer, jobs, updates as updates_mod
 from app.config import settings
 from app.processor import (
-    BadRequest, ProcessRequest, process, validate_mode_provider_combo,
+    ProcessRequest, process,
 )
 from app.server import (
     MediaItem,
@@ -39,8 +39,21 @@ def media_server_client() -> MediaServerClient:
         raise HTTPException(412, str(e)) from e
 
 
-def _vtt_path(media: Path, target_lang: str, mode: str) -> Path:
-    return media.with_name(f"{media.stem}.{target_lang}.{mode}.ai.vtt")
+def _vtt_path(media: Path, target_lang: str) -> Path:
+    """Build the output .vtt path next to the source media.
+
+    Naming: ``Inception.fr.ai.vtt`` — source stem + target lang + ``.ai``.
+    Pre-0.7.32 there was also a mode infix (``.audio`` / ``.scene`` /
+    ``.cinematic``) between target_lang and ``.ai``. The other two
+    modes were removed; the surviving mode (audio) was always implicit
+    in audio-only pipelines so the infix served no purpose. Existing
+    ``.<mode>.ai.vtt`` files on disk are still readable by media
+    servers — they just won't be overwritten by new jobs (which now
+    write the un-infixed filename). If a user has a file at the old
+    path AND we write a new one at the new path, the media server
+    will pick up the new one on its next scan and most servers handle
+    duplicate-language tracks by picking one."""
+    return media.with_name(f"{media.stem}.{target_lang}.ai.vtt")
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
@@ -66,7 +79,10 @@ class JobView(BaseModel):
     item_name: str
     target_lang: str
     provider: str
-    mode: str
+    # ``mode`` survives as a vestigial field on the wire so old jobs.json
+    # records deserialize cleanly (they always have one). New jobs all
+    # write "audio". The Jobs table column was removed in 0.7.32.
+    mode: str = "audio"
     status: str
     error: str | None
     output_path: str | None
@@ -112,7 +128,6 @@ def submit_item_job(
     target_lang: str | None = None,
     translation_provider: str | None = None,
     source_lang_priority: list[str] | None = None,
-    mode: str | None = None,
     skip_if_target_audio_exists: bool | None = None,
 ) -> jobs.Job:
     """Queue a job for a media-server item. Used by both UI flows (per-item
@@ -124,23 +139,11 @@ def submit_item_job(
     target_lang = target_lang or settings.default_target_lang
     provider = translation_provider or settings.default_translation_provider
     source_priority = source_lang_priority or settings.default_source_lang_priority
-    job_mode = mode or settings.default_mode
     skip_if_target = (
         skip_if_target_audio_exists
         if skip_if_target_audio_exists is not None
         else settings.default_skip_if_target_audio_exists
     )
-
-    # Fail fast on mode/provider mismatch so the UI surfaces the error at
-    # submission rather than after the job briefly queues and then fails.
-    # validate_mode_provider_combo is the single source of truth — also
-    # called inside process() defensively. Raises BadRequest; we re-raise
-    # as ValueError since this function's callers (UI routes) catch
-    # ValueError → HTTP 422.
-    try:
-        validate_mode_provider_combo(job_mode, provider)
-    except BadRequest as e:
-        raise ValueError(str(e)) from e
 
     # Fail fast when vocal isolation is requested but the demucs
     # package isn't actually importable in this image. Without this
@@ -179,13 +182,12 @@ def submit_item_job(
                 target_lang=target_lang,
                 source_lang_priority=source_priority,
                 translation_provider=provider,
-                mode=job_mode,
                 skip_if_target_audio_exists=skip_if_target,
             ),
             progress=job.update_progress,
             check_cancel=job.check_cancel,
         )
-        out = _vtt_path(media, target_lang, result.mode)
+        out = _vtt_path(media, target_lang)
         out.write_text(result.vtt, encoding="utf-8")
         job.output_path = str(out)
         job.cue_count = result.cue_count
@@ -201,7 +203,6 @@ def submit_item_job(
             stats_record = stats_mod.compute_from_vtt(
                 result.vtt,
                 media_path=str(media),
-                mode=result.mode,
                 detected_source_language=result.detected_source_language,
                 took_seconds=result.took_seconds,
                 pipeline_metrics=result.pipeline_metrics,
@@ -272,7 +273,6 @@ def submit_item_job(
         item_name=item.name,
         target_lang=target_lang,
         provider=provider,
-        mode=job_mode,
         runner=runner,
         whisper_model=settings.whisper_model,
         translation_model=translation_model,
@@ -351,7 +351,6 @@ def process_item(
     item_id: str,
     target_lang: str | None = None,
     translation_provider: Literal["nllb", "deepl", "llm"] | None = None,
-    mode: Literal["audio", "scene", "cinematic"] | None = None,
     skip_if_target_audio_exists: bool | None = None,
 ) -> JobView:
     """Queue a translation job for a media-server item. All optional params
@@ -359,12 +358,18 @@ def process_item(
     configured defaults. Query-param-based so HTMX's default form-POST works
     directly.
 
-    `mode` and `translation_provider` are Literal-typed so FastAPI rejects
-    garbage values at schema validation (422 with a helpful enum list)
-    rather than letting them propagate into the pipeline where they'd
-    surface as a less-readable BadRequest. target_lang stays a free string
-    — coverage varies per provider (NLLB ~30 langs, DeepL ~30, LLMs
-    arbitrary), so pinning it to a Literal would be the wrong cut."""
+    ``translation_provider`` is Literal-typed so FastAPI rejects garbage
+    values at schema validation (422 with a helpful enum list) rather
+    than letting them propagate into the pipeline. target_lang stays a
+    free string — coverage varies per provider (NLLB ~30 langs, DeepL
+    ~30, LLMs arbitrary), so pinning it to a Literal would be the wrong
+    cut.
+
+    Pre-0.7.32 this endpoint also accepted a ``mode`` parameter
+    (audio/scene/cinematic). With the scene + cinematic modes removed,
+    the only path is audio — silently ignore any incoming mode rather
+    than 422-rejecting it (keeps old Library JS that still sends
+    ``mode=audio`` working without a coordinated client/server bump)."""
     try:
         server = media_server_client()
         item = server.get_item(item_id)
@@ -377,7 +382,6 @@ def process_item(
             item=item,
             target_lang=target_lang,
             translation_provider=translation_provider,
-            mode=mode,
             skip_if_target_audio_exists=skip_if_target_audio_exists,
         )
     except ValueError as e:
@@ -593,7 +597,11 @@ def cache_repolish_vtt(cache_key: str) -> dict:
     # Best-effort: also overwrite the .vtt next to the media so a
     # media-server reload picks up the polished version. The path is
     # recoverable when payload has ``media_path`` AND we can parse
-    # ``target_lang`` + ``mode`` out of the NOTE header.
+    # ``target_lang`` out of the NOTE header. The legacy ``mode=``
+    # marker may or may not be present — for pre-0.7.32 entries we
+    # rebuild the legacy filename (``.fr.audio.ai.vtt``); for newer
+    # entries we use the un-infixed form (``.fr.ai.vtt``). Whichever
+    # filename actually exists on disk gets overwritten.
     disk_updated = False
     disk_path: Path | None = None
     media_path = payload.get("media_path")
@@ -601,18 +609,35 @@ def cache_repolish_vtt(cache_key: str) -> dict:
         import re
         m = re.search(
             r"NOTE Subtitle This auto-subs "
-            r"\([a-z]{2} -> (?P<tgt>[a-z]{2}), mode=(?P<mode>[a-z]+),",
+            r"\([a-z]{2} -> (?P<tgt>[a-z]{2})"
+            r"(?:, mode=(?P<mode>[a-z]+))?,",
             new_vtt,
         )
-        # Fall back to the payload's stored mode if the NOTE didn't
-        # parse — older entries always carry mode in the payload.
-        mode = (m.group("mode") if m else None) or payload.get("mode")
         tgt = m.group("tgt") if m else None
-        if mode and tgt:
+        # Legacy mode: present on pre-0.7.32 entries (either in the
+        # NOTE we just parsed, or in the payload itself).
+        legacy_mode = (m.group("mode") if m else None) or payload.get("mode")
+        if tgt:
             media = Path(media_path)
-            disk_path = media.with_name(
-                f"{media.stem}.{tgt}.{mode}.ai.vtt"
-            )
+            # Try the un-infixed filename first (post-0.7.32). If the
+            # legacy infixed file exists from a pre-0.7.32 run, use
+            # that path instead so the repolish hits whichever .vtt
+            # the media server is currently serving.
+            candidates: list[Path] = [
+                media.with_name(f"{media.stem}.{tgt}.ai.vtt"),
+            ]
+            if legacy_mode:
+                candidates.append(
+                    media.with_name(f"{media.stem}.{tgt}.{legacy_mode}.ai.vtt")
+                )
+            for candidate in candidates:
+                if candidate.is_file():
+                    disk_path = candidate
+                    break
+            else:
+                # Neither exists — write to the new un-infixed path so
+                # the next library scan picks it up.
+                disk_path = candidates[0]
             if disk_path.parent.is_dir():
                 try:
                     disk_path.write_text(new_vtt, encoding="utf-8")

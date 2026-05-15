@@ -41,14 +41,6 @@
           {% endfor %}
         </select>
       </label>
-      <label>
-        Mode
-        <select name="mode">
-          {% for m in modes %}
-            <option value="{{ m }}" {% if mode == m %}selected{% endif %}>{{ m }}</option>
-          {% endfor %}
-        </select>
-      </label>
     </div>
     <label class="inline-checkbox">
       <input type="checkbox" name="missing_only" value="1" {% if missing_only %}checked{% endif %}>
@@ -62,13 +54,9 @@
     <small>
       Page {{ (start_index // limit) + 1 }} of {{ ((total - 1) // limit) + 1 if total else 1 }}
       &middot; showing {{ items|length }} of {{ total }} item(s)
-      &middot; <strong>Subtitle now</strong> queues the row immediately with the target language + mode above.
+      &middot; <strong>Subtitle now</strong> queues the row immediately with the target language above.
       <strong>+ Batch</strong> adds the row to a staging list (sticky at the bottom) where you can
-      edit each item's lang and mode before processing.
-      {% if mode in ('scene', 'cinematic') %}
-        <br><strong>Note:</strong> {{ mode }} mode requires <code>translation_provider=llm</code>
-        with a vision-capable LLM backend. Adjust in <a href="/settings">Settings</a> if it isn't already.
-      {% endif %}
+      edit each item's target language before processing.
     </small>
   </p>
 
@@ -102,16 +90,16 @@
           <td class="col-action">
             <div class="row-actions">
               <button type="button" class="secondary subtitle-btn"
-                      hx-post="/api/process/{{ item.id }}?target_lang={{ target_lang }}&mode={{ mode }}"
+                      hx-post="/api/process/{{ item.id }}?target_lang={{ target_lang }}"
                       hx-swap="none"
                       hx-on::after-request="showJobResult('row-result-{{ item.id }}', event.detail.xhr, event.detail.successful)"
-                      title="Queue this item now with the target language + mode from the filter form above">
+                      title="Queue this item now with the target language from the filter form above">
                 ▶ Subtitle now
               </button>
               <button type="button" class="secondary outline add-to-batch-btn"
                       data-item-id="{{ item.id }}"
                       data-item-name="{{ item.name }}"
-                      title="Add this item to the batch (target lang + mode editable per-item below)">
+                      title="Add this item to the batch (target lang editable per-item below)">
                 + Batch
               </button>
             </div>
@@ -122,7 +110,7 @@
       </tbody>
     </table>
 
-    {% set base_qs = "?q=" ~ q ~ "&target_lang=" ~ target_lang ~ "&mode=" ~ mode ~ "&missing_only=" ~ ('1' if missing_only else '0') ~ "&limit=" ~ limit ~ ("&library_id=" ~ library_id if library_id else "") %}
+    {% set base_qs = "?q=" ~ q ~ "&target_lang=" ~ target_lang ~ "&missing_only=" ~ ('1' if missing_only else '0') ~ "&limit=" ~ limit ~ ("&library_id=" ~ library_id if library_id else "") %}
     <div style="margin: 1rem 0; display: flex; gap: 1rem; align-items: center;">
       {% if start_index > 0 %}
         <a href="{{ base_qs }}&start_index={{ start_index - limit if start_index >= limit else 0 }}">← Previous</a>
@@ -141,7 +129,7 @@
   {% endif %}
 
   {# Sticky batch panel at the bottom — visible only when the batch has items.
-     Renders fully from localStorage; supports per-item lang + mode editing,
+     Renders fully from localStorage; supports per-item target_lang editing,
      row removal, batch-wide processing, live per-row progress, batch-wide
      cancel, and a clear-all action. #}
   <div id="batch-panel" class="batch-panel" hidden>
@@ -163,7 +151,6 @@
         <tr>
           <th class="col-name">Item</th>
           <th class="col-target-lang">Target lang</th>
-          <th class="col-mode">Mode</th>
           <th class="col-status"></th>
           <th class="col-remove"></th>
         </tr>
@@ -172,7 +159,7 @@
     </table>
   </div>
 
-  {# Hidden template data: language and mode options for JS-rendered batch panel rows. #}
+  {# Hidden template data: language options for JS-rendered batch panel rows. #}
   <script type="application/json" id="batch-panel-data">
     {
       "languages": [
@@ -180,26 +167,24 @@
           {"code": {{ code|tojson }}, "name": {{ name|tojson }}}{% if not loop.last %},{% endif %}
         {% endfor %}
       ],
-      "modes": {{ modes|tojson }},
-      "default_target_lang": {{ target_lang|tojson }},
-      "default_mode": {{ mode|tojson }}
+      "default_target_lang": {{ target_lang|tojson }}
     }
   </script>
 
   <script>
     /*
-     * Batch flow with per-item lang/mode editing.
+     * Batch flow with per-item target_lang editing.
      *
      * Each row's "+ Batch" button captures the item id+name AND the
-     * filter form's CURRENT target_lang and mode at click time, then
-     * appends to localStorage. The batch panel at the bottom renders
-     * from localStorage on every change. Each batched row has its
-     * own editable lang and mode dropdowns so the user can override
-     * per-item before processing.
+     * filter form's CURRENT target_lang at click time, then appends
+     * to localStorage. The batch panel at the bottom renders from
+     * localStorage on every change. Each batched row has its own
+     * editable target_lang dropdown so the user can override per
+     * item before processing.
      *
      * "Process batch" iterates the batch and POSTs /api/process/{id}
-     * once per item with that item's specific lang+mode in the query
-     * string. Results are accumulated and shown in the panel.
+     * once per item with that item's specific target_lang in the
+     * query string. Results are accumulated and shown in the panel.
      */
     (function () {
       const STORAGE_KEY = 'subtitleThis.batch';
@@ -256,7 +241,6 @@
         batch = Object.entries(batch).map(([id, name]) => ({
           id, name,
           target_lang: data.default_target_lang,
-          mode: data.default_mode,
         }));
         saveBatch(batch);
       }
@@ -314,19 +298,6 @@
           });
           tdLang.appendChild(langSel);
           tr.appendChild(tdLang);
-
-          const tdMode = document.createElement('td');
-          tdMode.className = 'col-mode';
-          const modeSel = document.createElement('select');
-          for (const m of data.modes) {
-            modeSel.appendChild(buildOption(m, m, entry.mode));
-          }
-          modeSel.addEventListener('change', () => {
-            batch[idx].mode = modeSel.value;
-            saveBatch(batch);
-          });
-          tdMode.appendChild(modeSel);
-          tr.appendChild(tdMode);
 
           const tdStatus = document.createElement('td');
           tdStatus.className = 'col-status';
@@ -477,15 +448,14 @@
       }
 
       // ── "+ Batch" buttons on each row ─────────────────────────────────────
-      // Captures the current filter form's target_lang + mode at click time.
+      // Captures the current filter form's target_lang at click time.
       const filterForm = document.querySelector('form[action="/library"]');
       function captureFilterDefaults() {
         if (!filterForm) {
-          return { target_lang: data.default_target_lang, mode: data.default_mode };
+          return { target_lang: data.default_target_lang };
         }
         return {
           target_lang: filterForm.elements.target_lang.value,
-          mode: filterForm.elements.mode.value,
         };
       }
 
@@ -503,7 +473,6 @@
           batch.push({
             id, name,
             target_lang: defaults.target_lang,
-            mode: defaults.mode,
           });
           saveBatch(batch);
           renderBatch();
@@ -550,8 +519,7 @@
           const statusEl = document.getElementById('batch-row-status-' + entry.id);
           if (statusEl) statusEl.innerHTML = '<span class="status-pill queued">submitting…</span>';
           const url = '/api/process/' + encodeURIComponent(entry.id) +
-            '?target_lang=' + encodeURIComponent(entry.target_lang) +
-            '&mode=' + encodeURIComponent(entry.mode);
+            '?target_lang=' + encodeURIComponent(entry.target_lang);
           try {
             const resp = await fetch(url, { method: 'POST' });
             if (resp.ok) {

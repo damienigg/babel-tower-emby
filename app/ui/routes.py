@@ -16,7 +16,6 @@ from app import __version__, jobs
 from app.api.manage import media_server_client
 from app.config import READ_ONLY_FIELDS, SENSITIVE_FIELDS, _EnvSettings, settings
 from app.pipeline.lang import LANGUAGE_OPTIONS
-from app.processor import SUPPORTED_MODES
 from app.server import MediaServerError
 
 
@@ -99,8 +98,6 @@ templates.env.globals["app_version"] = __version__
 #   [FREE · LOCAL]            no $, runs offline, no account
 #   [FREE TIER · CLOUD]       free up to a quota, paid beyond
 #   [VARIES]                  free or paid depending on user's pick
-#   [+0 LLM calls]            no extra LLM cost over baseline
-#   [+~20 vision calls/film]  scene mode adds ~20 calls per film
 #   [ANY HOST · slow]         no special hardware needed but slow
 #   [INTEL iGPU · 5-10× faster]  needs specific hardware, much faster
 #   [~500 MB · balanced]      disk footprint + speed/quality trade-off
@@ -116,9 +113,8 @@ _SECTION_META: dict[str, str] = {
     ),
     "Defaults": (
         "Pre-set choices applied when you click 'Subtitle this' or 'Subtitle "
-        "selected' in the Library without overrides. The cost/complexity "
-        "lever is Mode here — pick the provider in the Translation section "
-        "below."
+        "selected' in the Library without overrides. The provider lives in the "
+        "Translation section below."
     ),
     "Speech-to-Text": (
         "Whisper transcribes audio to text. ALWAYS FREE — runs 100% locally, "
@@ -136,13 +132,6 @@ _SECTION_META: dict[str, str] = {
         "The LLM that translates subtitle cues (only used when provider=llm). "
         "Configure cloud (Anthropic / OpenAI / OpenRouter / …) or fully local "
         "(Ollama / LM Studio / LocalAI / vLLM) — Subtitle This doesn't care which."
-    ),
-    "Vision model": (
-        "The LLM that describes keyframes for the scene bible used by scene "
-        "and cinematic modes."
-    ),
-    "Scene & Cinematic": (
-        "Tuning knobs for scene-detection and cinematic-frame extraction."
     ),
     "Subtitles": (
         "WebVTT line-wrap formatting."
@@ -177,13 +166,6 @@ _SECTION_SHOW_IF: dict[str, dict] = {
     # Only meaningful when provider=llm (NLLB and DeepL ignore it entirely).
     "Translation model": {"field": "default_translation_provider",
                           "equals": "llm"},
-    # The Vision model section drives the scene bible builder. Only invoked
-    # by scene/cinematic modes — hide it when the user is on audio mode.
-    "Vision model": {"field": "default_mode",
-                     "equals": ["scene", "cinematic"]},
-    # Scene-detection tuning knobs do nothing in audio mode.
-    "Scene & Cinematic": {"field": "default_mode",
-                          "equals": ["scene", "cinematic"]},
 }
 
 
@@ -250,27 +232,6 @@ _FIELD_META: list[dict[str, Any]] = [
     # Power users can override via BABEL_DEFAULT_SOURCE_LANG_PRIORITY.
     # NOTE: default_translation_provider lives in the Translation section
     # below — the provider chooser belongs with the knobs it gates.
-    {"key": "default_mode", "section": "Defaults",
-     "label": "Quality tier — pick your call-volume tier", "type": "select",
-     "options": [
-         {"value": "audio",
-          "label": "audio · [+0 LLM calls beyond translation] whisper only · works with any provider · cheapest · default"},
-         {"value": "scene",
-          "label": "scene · [+~20 vision-LLM calls/film] adds scene bible · improves pronouns/gender · needs Vision model + provider=llm"},
-         {"value": "cinematic",
-          "label": "cinematic · [+1 LLM call per cue with image] adds per-cue frame to translation · most expensive · needs vision-capable Translation model"},
-     ],
-     "help": (
-         "Higher tier = more visual context for the translator = better quality on tricky "
-         "scenes, but more LLM calls.\n"
-         "• audio uses Whisper only. No vision. Works with any provider (NLLB/DeepL/LLM).\n"
-         "• scene runs ffmpeg scene-detection, sends one keyframe per shot to the Vision LLM "
-         "for a 1-2 sentence description, then feeds the resulting bible to the translator as "
-         "cached system context. Requires Vision model section configured AND provider=llm.\n"
-         "• cinematic does what scene does AND additionally attaches one keyframe per cue to "
-         "the translation call so the translator literally sees each moment. Requires the "
-         "Translation model to be vision-capable AND provider=llm."
-     )},
     {"key": "default_skip_if_target_audio_exists", "section": "Defaults",
      "label": "Skip when target-language audio is already present", "type": "checkbox",
      "help": "If the file already has audio in the target language, do nothing. Saves "
@@ -389,21 +350,10 @@ _FIELD_META: list[dict[str, Any]] = [
          {"value": "cuda", "label": "cuda · [NVIDIA GPU] needs nvidia-container-toolkit (rare on TrueNAS)"},
      ],
      "help": "Where faster-whisper runs. cuda only matters if you've added an NVIDIA GPU."},
-    {"key": "openvino_device", "section": "Speech-to-Text",
-     "label": "OpenVINO device", "type": "select",
-     "show_if": {"field": "whisper_backend", "equals": "openvino"},
-     "options": [
-         {"value": "AUTO", "label": "AUTO · [recommended] picks GPU when available, falls back to CPU silently"},
-         {"value": "GPU",  "label": "GPU · force Intel iGPU — fails loudly if /dev/dri or driver isn't available"},
-         {"value": "CPU",  "label": "CPU · force CPU even on iGPU hosts (useful for benchmarking)"},
-     ],
-     "help": (
-         "Where OpenVINO runs inference (Whisper STT and NLLB translation). "
-         "AUTO is the right default but silently falls back to CPU if it can't "
-         "use the GPU — switch to GPU explicitly to surface the real reason. "
-         "Watch `docker logs subtitle-this` after a model load: the line "
-         "'[openvino] whisper:…  selected=GPU' confirms what was actually picked."
-     )},
+    # openvino_device removed from the UI: AUTO is always the right
+    # answer (it picks GPU when available, falls back to CPU silently).
+    # Explicit GPU/CPU forcing confused users more than it helped.
+    # Power users can still override via BABEL_OPENVINO_DEVICE env var.
     {"key": "stt_region_packing", "section": "Speech-to-Text",
      "label": "Region packing (OpenVINO) — fast mode", "type": "checkbox",
      "show_if": {"field": "whisper_backend", "equals": "openvino"},
@@ -449,7 +399,7 @@ _FIELD_META: list[dict[str, Any]] = [
          {"value": "deepl",
           "label": "deepl · [FREE TIER 500k chars/mo · CLOUD beyond] best on EU/Asian pairs · ~30 langs · text-only"},
          {"value": "llm",
-          "label": "llm · [VARIES] uses LLM configured below · free if local (Ollama) or paid if cloud · best quality · vision-aware in scene/cinematic"},
+          "label": "llm · [VARIES] uses LLM configured below · free if local (Ollama) or paid if cloud · best quality"},
      ],
      "help": (
          "Sorted from cheapest to most flexible:\n"
@@ -460,8 +410,7 @@ _FIELD_META: list[dict[str, Any]] = [
          "European and East-Asian pairs. The DeepL API key field appears below when you pick this.\n"
          "• LLM — uses whatever you configure in the Translation model section. Highest "
          "quality, supports any language pair. Free if you point at local Ollama / LM Studio. "
-         "Paid per-token if you point at Anthropic / OpenAI / OpenRouter / etc. The only "
-         "provider that benefits from scene/cinematic visual context."
+         "Paid per-token if you point at Anthropic / OpenAI / OpenRouter / etc."
      )},
     {"key": "nllb_model", "section": "Translation",
      "label": "NLLB model variant", "type": "select",
@@ -552,84 +501,6 @@ _FIELD_META: list[dict[str, Any]] = [
              "LocalAI) that don't authenticate by default — Babel substitutes a placeholder so "
              "the OpenAI SDK is happy. Set a value only if you've explicitly enabled auth on "
              "your local server (e.g. vLLM with --api-key)."},
-    {"key": "translation_llm_supports_vision", "section": "Translation model",
-     "label": "Supports vision (required for cinematic mode)", "type": "checkbox",
-     "help": "Whether this model accepts image inputs. Cinematic mode attaches one frame "
-             "per cue to translation calls — needs a multimodal model (claude-opus-4-7, "
-             "gpt-4o, gemini-1.5-pro, qwen2.5-vl, llava, etc.). Anthropic models always "
-             "support vision (this flag is ignored when wire protocol = anthropic)."},
-
-    # ── Vision model (only used by scene + cinematic modes) ───────────────────
-    {"key": "vision_llm_enabled", "section": "Vision model",
-     "label": "Enable scene/cinematic modes", "type": "checkbox",
-     "help": "Master switch. Toggle off if you don't have a vision-capable LLM and only "
-             "use audio mode. When off, scene/cinematic modes 400 immediately at submission."},
-    {"key": "vision_llm_type", "section": "Vision model",
-     "label": "Wire protocol", "type": "select",
-     "options": [
-         {"value": "openai_compat",
-          "label": "openai_compat · [universal] Ollama · LM Studio · OpenAI · OpenRouter · Zhipu/GLM · …"},
-         {"value": "anthropic",
-          "label": "anthropic · [Claude only] adds prompt caching, JSON schema"},
-     ],
-     "help": "Same convention as the Translation model: pick `openai_compat` for everything "
-             "except Claude."},
-    {"key": "vision_llm_model", "section": "Vision model",
-     "label": "Model", "type": "text",
-     "help": "What makes a good vision describer: strong OCR (read on-screen text), "
-             "scene-understanding (count/identify characters, recognize settings), and "
-             "concise output.\n"
-             "• Frontier cloud: claude-opus-4-7, gpt-4o, gemini-1.5-pro.\n"
-             "• Frontier open-source: qwen2.5-vl:72b (Alibaba — among the strongest open vision "
-             "models), glm-4v-plus, internvl2:26b, llava-1.6:34b, pixtral-12b.\n"
-             "• Cheap & fast: claude-haiku-4-5, gpt-4o-mini, gemini-1.5-flash, qwen2-vl:7b."},
-    {"key": "vision_llm_endpoint", "section": "Vision model",
-     "label": "Endpoint URL (only when wire protocol = openai_compat)", "type": "text",
-     "help": "Same endpoint conventions as the Translation model. The two slots are "
-             "INDEPENDENT — common pattern: cloud LLM for translation + local Ollama running "
-             "qwen2.5-vl for vision (vision is the slot that benefits most from a strong "
-             "specialized model)."},
-    {"key": "vision_llm_api_key", "section": "Vision model",
-     "label": "API key (LEAVE BLANK for local servers)", "type": "password",
-     "help": "REQUIRED for cloud providers. LEAVE BLANK for default local Ollama / LM Studio / "
-             "LocalAI. Independent from the Translation slot — paste the same value in both "
-             "if you're using one provider for everything."},
-
-    # ── Scene & Cinematic tuning (no effect when mode=audio) ──────────────────
-    {"key": "scene_detection_threshold", "section": "Scene & Cinematic",
-     "label": "Scene-detection threshold", "type": "number",
-     "help": "ffmpeg's scene-change threshold, 0.0–1.0. Lower → more scenes detected. "
-             "0.3–0.5 is typical for film/TV; lower for fast-cut content."},
-    {"key": "scene_min_length_seconds", "section": "Scene & Cinematic",
-     "label": "Min scene length (seconds)", "type": "number",
-     "help": "Skip scenes shorter than this — avoids micro-shots polluting the bible."},
-    {"key": "scene_max_scenes", "section": "Scene & Cinematic",
-     "label": "Max scenes per file (hard cap)", "type": "number",
-     "help": "~200 typical for a 2-hour film. Higher = more vision-LLM calls = more $/wait."},
-    {"key": "scene_keyframe_position", "section": "Scene & Cinematic",
-     "label": "Keyframe sample position", "type": "select",
-     "options": [
-         {"value": "midpoint", "label": "midpoint · [safest] center of the shot · default"},
-         {"value": "start",    "label": "start · first frame of the shot"},
-         {"value": "end",      "label": "end · last frame of the shot"},
-     ],
-     "help": "Where in each scene to grab the representative frame for the vision LLM."},
-    {"key": "scene_frame_max_size", "section": "Scene & Cinematic",
-     "label": "Scene keyframe max long edge (px)", "type": "number",
-     "help": "Resolution sent to the Vision LLM for the scene bible. Smaller = cheaper "
-             "+ faster, but loses fine details (small on-screen text gets unreadable below ~600px)."},
-    {"key": "scene_bible_batch_size", "section": "Scene & Cinematic",
-     "label": "Scenes per bible-build call", "type": "number",
-     "help": "How many keyframes the Vision LLM describes per API call. 10 is a good balance."},
-    {"key": "cinematic_frame_max_size", "section": "Scene & Cinematic",
-     "label": "Cinematic per-cue frame max long edge (px)", "type": "number",
-     "help": "Smaller default than scene keyframes since cinematic ships one frame "
-             "per cue (potentially 1000+ images per film). Shrinking saves a lot."},
-    {"key": "cinematic_batch_size", "section": "Scene & Cinematic",
-     "label": "Cues per cinematic call", "type": "number",
-     "help": "Smaller than the text-only batch (default 30) because each call ships "
-             "one image per cue. 10 keeps each call manageable."},
-
     # ── Subtitle formatting ───────────────────────────────────────────────────
     {"key": "max_line_chars", "section": "Subtitles",
      "label": "Max chars per line", "type": "number",
@@ -715,15 +586,6 @@ _FIELD_META: list[dict[str, Any]] = [
              "film length. Lower values reduce RAM further; higher values "
              "have fewer segment-boundary cue splits. Ignored when "
              "whisper_backend = cpu (faster-whisper streams from disk on its own)."},
-    {"key": "cinematic_max_cues_with_frames", "section": "Resource safety",
-     "label": "Cinematic — max cues that get a frame attached", "type": "number",
-     "help": "Hard cap on per-cue frame extraction in cinematic mode. A 2 h+ "
-             "dialog-heavy film can produce 1500+ cues — pre-extracting one "
-             "JPEG per cue is what caused the original TrueNAS OOM. With this "
-             "cap, only the first N cues ship frames; remaining cues translate "
-             "text-only (still using the scene bible). Set to 0 to disable "
-             "per-cue frames entirely (cinematic ≈ scene mode)."},
-
     # ── Security ────────────────────────────────────────────────────────────
     {"key": "auth_credentials", "section": "Security",
      "label": "HTTP Basic credentials (user:password)", "type": "password",
@@ -894,7 +756,7 @@ async def onboarding_save(request: Request) -> HTMLResponse:
     updates: dict[str, Any] = {}
     for key in (
         "media_server_type", "media_server_url", "media_server_api_key",
-        "default_target_lang", "default_mode", "default_translation_provider",
+        "default_target_lang", "default_translation_provider",
     ):
         v = form.get(key)
         if v is not None and str(v).strip():
@@ -929,7 +791,6 @@ def jobs_partial(request: Request) -> HTMLResponse:
 def library(
     request: Request,
     target_lang: str | None = None,
-    mode: str | None = None,
     q: str | None = None,
     missing_only: int = 0,
     start_index: int = 0,
@@ -945,11 +806,9 @@ def library(
                 "configured": False,
                 "items": [], "total": 0,
                 "target_lang": target_lang or settings.default_target_lang,
-                "mode": mode or settings.default_mode,
                 "q": q or "",
                 "missing_only": bool(missing_only),
                 "start_index": 0, "limit": limit,
-                "modes": list(SUPPORTED_MODES),
                 "language_options": LANGUAGE_OPTIONS,
                 "libraries": [],
                 "library_id": library_id or "",
@@ -958,7 +817,6 @@ def library(
         )
 
     target_lang = target_lang or settings.default_target_lang
-    mode = mode or settings.default_mode
 
     error = None
     items: list[dict] = []
@@ -1000,12 +858,10 @@ def library(
             "items": items,
             "total": total,
             "target_lang": target_lang,
-            "mode": mode,
             "q": q or "",
             "missing_only": bool(missing_only),
             "start_index": start_index,
             "limit": limit,
-            "modes": list(SUPPORTED_MODES),
             "language_options": LANGUAGE_OPTIONS,
             "libraries": libraries,
             "library_id": library_id or "",
@@ -1030,19 +886,20 @@ def _find_legacy_pipeline_metrics(output_path: str | None) -> dict | None:
     import json
     from pathlib import Path
     out_name = Path(output_path).name
-    # ``Inception.fr.audio.ai.vtt`` → ``Inception`` after stripping
-    # ``.vtt`` → ``.ai`` → ``.<mode>`` → ``.<lang>``. We don't enforce
-    # a known mode/lang set here because the search is just a
-    # heuristic best-effort; a wrong basename simply produces no
-    # match and the function falls back to None.
+    # ``Inception.fr.ai.vtt`` → ``Inception`` after stripping
+    # ``.vtt`` → ``.ai`` → ``.<lang>``. Pre-0.7.32 the filename also
+    # had a ``.<mode>`` infix (``.audio``/``.scene``/``.cinematic``)
+    # between ``.<lang>`` and ``.ai``; we still strip those when
+    # present so older .vtt files in the user's library keep being
+    # discoverable by this lookup.
     base = out_name
     if base.endswith(".vtt"):
         base = base[:-4]
     if base.endswith(".ai"):
         base = base[:-3]
-    for mode in (".audio", ".scene", ".cinematic"):
-        if base.endswith(mode):
-            base = base[: -len(mode)]
+    for legacy_mode in (".audio", ".scene", ".cinematic"):
+        if base.endswith(legacy_mode):
+            base = base[: -len(legacy_mode)]
             break
     # ``.<lang>`` — at most 5 chars (e.g. ".fr", ".zh-CN"); we just
     # peel one final ``.<word>`` segment off.

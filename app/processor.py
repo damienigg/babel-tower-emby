@@ -7,21 +7,22 @@ whole-library sweep. The job runner (queued via the UI's per-item
 into here, optionally passing progress + cancel callbacks so the UI can
 show a live progress bar and respect cancel clicks.
 
-Modes:
-- `audio` — Whisper → text translator. No vision.
-- `scene` — adds an LLM-vision scene bible: detect shots, extract one
-  keyframe per shot, ask the configured Vision LLM for a 1-2 sentence
-  description of each, then send the whole bible as cached system context for
-  the translation calls.
-- `cinematic` — everything `scene` does, plus a per-cue keyframe attached as
-  an image block to the translation call so the translator literally sees what
-  is on screen for each line.
+Pipeline shape (single audio-only mode since 0.7.32):
+
+    [optional vocal isolation] → Whisper STT → translator → VTT
+
+Pre-0.7.32 there were also "scene" and "cinematic" multimodal modes
+that ran a Vision LLM on extracted keyframes (+ per-cue frames for
+cinematic) to give the translator visual context. Those were removed
+along with the supporting pipeline modules (scenes / scene_bible /
+frames) — the modes added significant UI/code complexity for marginal
+subtitle-quality improvement, and the same disambiguation usually
+falls out of the surrounding dialog Whisper already captures.
 
 Errors are raised as typed subclasses of ProcessError so callers can map them
 to specific HTTP status codes without resorting to string matching.
 """
 import logging
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,9 +32,8 @@ _log = logging.getLogger("subtitle_this")
 
 from app import cache as cache_mod
 from app.config import settings
-from app.pipeline import audio, frames, scene_bible, scenes, stt, tracks
+from app.pipeline import audio, stt, tracks
 from app.pipeline.translate import TranslationError, get_provider
-from app.pipeline.translate.base import SceneInfo, TranslationContext
 from app.pipeline.vtt import to_webvtt
 
 
@@ -63,10 +63,6 @@ def _scaled(progress: ProgressCB, *, base: float, span: float, stage: str) -> Ca
     def cb(frac: float) -> None:
         progress(base + max(0.0, min(1.0, frac)) * span, stage)
     return cb
-
-
-SUPPORTED_MODES = ("audio", "scene", "cinematic")
-MULTIMODAL_MODES = ("scene", "cinematic")
 
 
 class ProcessError(Exception):
@@ -99,7 +95,6 @@ class ProcessRequest:
     target_lang: str
     source_lang_priority: list[str]
     translation_provider: str
-    mode: str = "audio"
     skip_if_target_audio_exists: bool = True
 
 
@@ -111,7 +106,6 @@ class ProcessResult:
     source_track_title: str | None
     detected_source_language: str
     cue_count: int
-    mode: str
     cached: bool
     took_seconds: float
     # Optional per-run pipeline telemetry — VAD coverage, packing pad-
@@ -119,38 +113,6 @@ class ProcessResult:
     # from a cache hit that pre-dates the telemetry-bearing payload,
     # populated otherwise. Surfaced on the Cache Explorer stats page.
     pipeline_metrics: "dict | None" = None
-
-
-def validate_mode_provider_combo(mode: str, translation_provider: str) -> None:
-    """The mode/provider invariants checkable without touching the media
-    file or the network. Single source of truth — used eagerly at job
-    submission (so the UI surfaces the error immediately on click) AND
-    defensively inside process() (so any settings drift between submission
-    and execution surfaces as the same error rather than a silent garbage
-    output). Raises BadRequest with the same message either way.
-
-    Heavier validation (vision-LLM api_key/endpoint presence) lives only
-    in process() since it's specific to actually building a client.
-    """
-    if mode not in SUPPORTED_MODES:
-        raise BadRequest(f"unknown mode {mode!r} (expected one of {SUPPORTED_MODES})")
-    if mode in MULTIMODAL_MODES:
-        if translation_provider != "llm":
-            raise BadRequest(
-                f"mode={mode!r} requires translation_provider='llm' "
-                "(only the LLM provider talks to a multimodal backend)."
-            )
-        if not settings.vision_llm_enabled:
-            raise BadRequest(
-                f"mode={mode!r} requires the Vision LLM to be enabled. Configure a "
-                "vision-capable model in Settings → Vision model and toggle vision_llm_enabled."
-            )
-        if mode == "cinematic" and not settings.translation_llm_supports_vision:
-            raise BadRequest(
-                "cinematic mode also attaches per-cue frames to the translation LLM. "
-                "Enable translation_llm_supports_vision in Settings, pick a vision-capable "
-                "translation model, or use scene mode instead."
-            )
 
 
 def process(
@@ -161,48 +123,24 @@ def process(
 ) -> ProcessResult:
     started = time.monotonic()
 
-    validate_mode_provider_combo(req.mode, req.translation_provider)
     check_cancel()
-    if req.mode in MULTIMODAL_MODES:
-        # Validate the configured vision LLM has its credentials. This is
-        # process()-only (not in the shared validator) because it requires
-        # poking at the active Vision LLM type configuration, which is more
-        # detail than the submission-time fast-fail needs.
-        v_type = (settings.vision_llm_type or "").lower()
-        if v_type == "anthropic":
-            if not settings.vision_llm_api_key:
-                raise BadRequest(
-                    f"mode={req.mode!r} with vision_llm_type=anthropic requires "
-                    "vision_llm_api_key to be set."
-                )
-        elif v_type == "openai_compat":
-            if not settings.vision_llm_endpoint:
-                raise BadRequest(
-                    f"mode={req.mode!r} with vision_llm_type=openai_compat requires "
-                    "vision_llm_endpoint to be set."
-                )
 
     media = Path(req.media_path)
     if not media.exists():
         raise MediaNotFound(f"media not found: {req.media_path}")
 
     # The cache key is built from every input that affects output:
-    # - For scene/cinematic, the detection threshold + the vision LLM model
-    #   (the bible depends on it).
-    # - For provider=llm, the translation LLM model (output depends on it
-    #   directly). DeepL/NLLB don't have a model setting that varies, so we
-    #   pass None and they fall through to a single key per provider.
-    # - For the OpenVINO STT backend, vad_enabled materially changes the cue
-    #   list (silence-region hallucinations vs. clean output). The CPU
-    #   backend's VAD is internal to faster-whisper and unrelated, so we
-    #   pass None for it and avoid spuriously invalidating CPU cache entries
-    #   when this flag is toggled.
-    threshold = settings.scene_detection_threshold if req.mode in MULTIMODAL_MODES else None
+    # - For provider=llm, the translation LLM model (output depends on
+    #   it directly). DeepL/NLLB don't have a model setting that
+    #   varies, so we pass None and they fall through to a single key
+    #   per provider.
+    # - For the OpenVINO STT backend, vad_enabled materially changes
+    #   the cue list (silence-region hallucinations vs. clean output).
+    #   The CPU backend's VAD is internal to faster-whisper and
+    #   unrelated, so we pass None for it and avoid spuriously
+    #   invalidating CPU cache entries when this flag is toggled.
     tllm_model = (
         settings.translation_llm_model if req.translation_provider == "llm" else None
-    )
-    vllm_model = (
-        settings.vision_llm_model if req.mode in MULTIMODAL_MODES else None
     )
     vad_enabled_key = (
         settings.vad_enabled if settings.whisper_backend.lower() == "openvino" else None
@@ -212,10 +150,7 @@ def process(
         model=settings.whisper_model,
         provider=req.translation_provider,
         source_priority=req.source_lang_priority,
-        mode=req.mode,
-        scene_threshold=threshold,
         translation_llm_model=tllm_model,
-        vision_llm_model=vllm_model,
         vad_enabled=vad_enabled_key,
     )
     # Two-level cache: the quick (path+mtime) fingerprint is the hot path;
@@ -233,7 +168,6 @@ def process(
             source_track_title=cached["source_track"]["title"],
             detected_source_language=cached["detected_source_language"],
             cue_count=cached["cue_count"],
-            mode=cached.get("mode", req.mode),
             cached=True,
             took_seconds=time.monotonic() - started,
             pipeline_metrics=cached.get("pipeline_metrics"),
@@ -402,18 +336,6 @@ def process(
         progress(80, "translating")
     check_cancel()
 
-    # For scene/cinematic, use the CONTENT fingerprint (not the quick one)
-    # to key the on-disk scene bible. The bible depends on the visual
-    # content of the film — mtime bumps and metadata-only edits don't
-    # invalidate it, so we want the bible cache to survive those too.
-    context = (
-        _build_context(
-            req, cache_mod.content_fingerprint(media), transcription.cues,
-            check_cancel=check_cancel,
-        )
-        if req.mode in MULTIMODAL_MODES else None
-    )
-
     def _translation_model_id(provider_name: str) -> str | None:
         """Return the human-readable model identifier for the active
         translation provider. Surfaced on the stats page so the user
@@ -440,7 +362,6 @@ def process(
             transcription.cues,
             transcription.detected_language,
             req.target_lang,
-            context=context,
             progress=_scaled(progress, base=80, span=18, stage="translating"),
             check_cancel=check_cancel,
         )
@@ -488,7 +409,7 @@ def process(
     # "raw timing" indicator.
     note_body = (
         f"Subtitle This auto-subs ({transcription.detected_language} -> {req.target_lang}, "
-        f"mode={req.mode}, whisper={settings.whisper_model}, provider={req.translation_provider}"
+        f"whisper={settings.whisper_model}, provider={req.translation_provider}"
     )
     if polish_applied:
         note_body += ", polished=true"
@@ -515,7 +436,6 @@ def process(
         "source_track": {"index": track.index, "language": track.language, "title": track.title},
         "detected_source_language": transcription.detected_language,
         "cue_count": len(translated),
-        "mode": req.mode,
         # Pipeline telemetry — None on legacy cache hits and on the
         # CPU/faster-whisper backend (only the OpenVINO path instruments
         # VAD / packing today). Consumers must tolerate the absence.
@@ -542,7 +462,6 @@ def process(
         stats_record = stats_mod.compute_from_vtt(
             vtt,
             media_path=str(media),
-            mode=req.mode,
             detected_source_language=transcription.detected_language,
             took_seconds=time.monotonic() - started,
             pipeline_metrics=pipeline_metrics_dict,
@@ -566,123 +485,9 @@ def process(
         source_track_title=track.title,
         detected_source_language=transcription.detected_language,
         cue_count=len(translated),
-        mode=req.mode,
         cached=False,
         took_seconds=time.monotonic() - started,
         pipeline_metrics=pipeline_metrics_dict,
     )
 
 
-def _build_context(
-    req: ProcessRequest,
-    fp: str,
-    cues: list[stt.Cue],
-    *,
-    check_cancel: CancelCB = _noop_cancel,
-) -> TranslationContext:
-    """Build the bible (cached) and, for cinematic, also extract per-cue frames.
-
-    Cancel checks are interleaved between scene-detection / frame-extraction /
-    LLM-bible-build / per-cue frame extraction so a cancel click during the
-    minutes-long bible build takes effect promptly. Critically, the bible is
-    only `store_cached_bible`-d AFTER `describe_scenes` returns successfully,
-    so a cancel mid-build leaves nothing on disk."""
-    bible = scene_bible.load_cached_bible(fp)
-    if bible is None:
-        check_cancel()
-        scene_list = scenes.detect_scenes(
-            req.media_path,
-            threshold=settings.scene_detection_threshold,
-            min_length_seconds=settings.scene_min_length_seconds,
-            max_scenes=settings.scene_max_scenes,
-            check_cancel=check_cancel,
-        )
-        if not scene_list:
-            # No scenes detected — fall back to plain translation rather than
-            # erroring. The translator just won't have visual context.
-            return TranslationContext()
-
-        # Lazy keyframe extraction (same pattern as cinematic cue_frames).
-        # Previously we pre-extracted ALL scene keyframes upfront into a
-        # dict held through the entire 5-15 min bible build — for the
-        # default 500 scenes × 250 KB JPEGs that's ~125 MB resident. With
-        # the provider, each LLM batch (scene_bible_batch_size=10 by
-        # default) extracts and releases its frames inline, so peak RAM
-        # for this stage drops to ~2.5 MB.
-        media_path = req.media_path
-        frame_max = settings.scene_frame_max_size
-        keyframe_position = settings.scene_keyframe_position
-
-        def _scene_keyframe_provider(scene) -> bytes | None:
-            ts = scenes.keyframe_timestamp(scene, keyframe_position)
-            try:
-                return frames.extract_frame_bytes(media_path, ts, frame_max)
-            except subprocess.CalledProcessError:
-                return None   # one missing frame doesn't doom the bible
-
-        scene_bible.describe_scenes(
-            scene_list,
-            keyframe_provider=_scene_keyframe_provider,
-            check_cancel=check_cancel,
-        )
-        scene_bible.store_cached_bible(fp, scene_list)
-        bible = scene_list
-
-    cue_to_scene = scenes.map_cues_to_scenes(cues, bible)
-    scene_infos = [
-        SceneInfo(index=s.index, start=s.start, end=s.end, description=s.description or "")
-        for s in bible if s.description
-    ]
-
-    cue_ids_with_frames: set[int] | None = None
-    cue_frames_provider = None
-    if req.mode == "cinematic":
-        # Frame extraction is now LAZY + CAPPED. Previously we pre-extracted
-        # one JPEG per cue here and held the entire dict in RAM through the
-        # translation phase — for a 2 h film with heavy dialog that's
-        # 1500+ JPEGs ≈ 200-300 MB resident, plus base64 inflation per LLM
-        # call. With heavy use of cinematic mode this peak is what blew up
-        # the TrueNAS host. Two changes:
-        #
-        # 1. Cap (settings.cinematic_max_cues_with_frames): only the first N
-        #    cues get a frame. The remainder still translate — they just go
-        #    through the text-only path. Set the cap to 0 to disable per-cue
-        #    frames entirely (effectively downgrading cinematic to scene).
-        # 2. Lazy: instead of building a {cue_id: bytes} dict here, we hand
-        #    the translator a closure that calls ffmpeg per-cue at the
-        #    moment the frame is needed. The translator extracts a batch's
-        #    worth of frames at a time — peak RAM per batch is now
-        #    cinematic_batch_size frames, not len(cues).
-        cap = max(0, int(settings.cinematic_max_cues_with_frames or 0))
-        if cap > 0:
-            cue_ids_with_frames = {c.id for c in cues[:cap]}
-            media_path = req.media_path
-            frame_max = settings.cinematic_frame_max_size
-            accurate = bool(settings.cinematic_frame_accurate_seek)
-            # Build a cue.id → cue index for O(1) lookup in the provider.
-            # The provider fires once per (cue.id, batch) — without the
-            # index we'd O(N) scan `cues` for every frame; on a 1500-cue
-            # film with a 10-cue batch size that's 1500×10 = 15k scans.
-            cue_by_id = {c.id: c for c in cues}
-
-            def _extract_one(cue_id: int) -> bytes | None:
-                c = cue_by_id.get(cue_id)
-                if c is None:
-                    return None
-                ts = (c.start + c.end) / 2.0
-                try:
-                    return frames.extract_frame_bytes(
-                        media_path, ts, frame_max, accurate=accurate,
-                    )
-                except subprocess.CalledProcessError:
-                    return None   # one missing frame doesn't doom the job
-
-            cue_frames_provider = _extract_one
-
-    return TranslationContext(
-        scenes=scene_infos,
-        cue_to_scene=cue_to_scene,
-        cue_frames={},   # eager dict stays empty — provider does the work
-        cue_frames_provider=cue_frames_provider,
-        cue_ids_with_frames=cue_ids_with_frames,
-    )

@@ -1,17 +1,24 @@
-"""LLM-backed translation provider. Delegates to the configured LLM backend
-(Anthropic native or OpenAI-compatible) via app.pipeline.llm. The translation
-prompt and JSON schema are the same regardless of backend; only the wire
-format differs."""
+"""LLM-backed translation provider. Delegates to the configured LLM
+backend (Anthropic native or OpenAI-compatible) via app.pipeline.llm.
+The translation prompt and JSON schema are the same regardless of
+backend; only the wire format differs.
+
+Pre-0.7.32 this module also threaded a scene bible + per-cue keyframes
+into the LLM call for the "scene" and "cinematic" modes. Those modes
+were removed; the provider is now text-only. The ImageContent /
+multimodal plumbing in ``app.pipeline.llm`` is no longer reached from
+here but stays in place — translation just doesn't use it.
+"""
 import json
 from typing import Callable
 
 from app.config import settings
 from app.pipeline.llm import (
-    ContentBlock, ImageContent, LLMError, SystemBlock, TextContent, get_translation_llm,
+    ContentBlock, LLMError, SystemBlock, TextContent, get_translation_llm,
 )
 from app.pipeline.stt import Cue
 from app.pipeline.translate._util import batches
-from app.pipeline.translate.base import TranslationContext, TranslationError
+from app.pipeline.translate.base import TranslationError
 
 
 def _noop_progress(frac: float) -> None: ...
@@ -36,14 +43,8 @@ _SYSTEM_PROMPT = """You are a professional subtitle translator producing high-qu
 - Avoid restating information that is already obvious from preceding cues.
 - Punctuation should follow target-language conventions, not the source's.
 
-# Optional context (scene/cinematic modes)
-- A `scene bible` (a list of {index, start, end, description}) may be included in the system prefix. It describes what is visible at each moment in the film. Use it to disambiguate pronouns, choose correct gendered/numbered agreement, and identify referents like "this", "that", "here", "she", "he", "they".
-- Each cue in the input may carry an extra `scene` field — the description of the scene that cue belongs to. This is shorthand for the relevant bible entry.
-- Image blocks labelled "Frame for cue N:" may appear before the cue payload. When present, they show the on-screen moment for that cue. Use them to inform translation choices: who is on screen, where, doing what, and any visible text or signage.
-- Never translate the bible, scene fields, or labels. They are context only.
-
 # Output format
-You will receive a JSON array of subtitle cues, each with an integer `id` and a `text` field (and possibly a `scene` field, which is context — not for translation).
+You will receive a JSON array of subtitle cues, each with an integer `id` and a `text` field.
 Return a JSON object with a `translations` array of the same length, in the same order, where each entry has the matching `id` and the translated `text`.
 Do not add, remove, reorder, merge, or split cues. The output array length must exactly equal the input array length, with the same ids in the same order.
 """
@@ -82,27 +83,17 @@ class LLMTranslationProvider:
         cues: list[Cue],
         source_lang: str,
         target_lang: str,
-        context: TranslationContext | None = None,
         *,
         progress: Callable[[float], None] = _noop_progress,
         check_cancel: Callable[[], None] = _noop_cancel,
     ) -> list[Cue]:
-        cinematic = bool(context and context.has_cue_frames())
-        if cinematic and not self._client.supports_vision():
-            raise TranslationError(
-                "cinematic mode attaches per-cue frames to translation calls, so "
-                "the translation LLM must be vision-capable. Either switch the "
-                "translation LLM type to anthropic, pick a vision-capable openai_compat "
-                "model (gpt-4o, qwen2.5-vl, etc.), or toggle on "
-                "translation_llm_supports_vision in Settings."
-            )
-        batch_size = settings.cinematic_batch_size if cinematic else settings.translation_batch_size
+        batch_size = settings.translation_batch_size
 
         out: list[Cue] = []
         total = max(1, len(cues))
         for batch in batches(cues, batch_size):
             check_cancel()
-            out.extend(self._translate_batch(batch, source_lang, target_lang, context))
+            out.extend(self._translate_batch(batch, source_lang, target_lang))
             progress(len(out) / total)
         progress(1.0)
         return out
@@ -112,54 +103,24 @@ class LLMTranslationProvider:
         batch: list[Cue],
         source_lang: str,
         target_lang: str,
-        context: TranslationContext | None,
     ) -> list[Cue]:
-        scene_by_index = {s.index: s for s in (context.scenes if context else [])}
-        payload = []
-        for c in batch:
-            entry: dict = {"id": c.id, "text": c.text}
-            if context and c.id in context.cue_to_scene:
-                scene = scene_by_index.get(context.cue_to_scene[c.id])
-                if scene and scene.description:
-                    entry["scene"] = scene.description
-            payload.append(entry)
+        payload = [{"id": c.id, "text": c.text} for c in batch]
 
-        # Build the user content: optional per-cue frames first, then the JSON
-        # payload. Frames are resolved through context.frame_for(cue_id) which
-        # prefers the eager dict (tests inject fake JPEGs there) and falls
-        # back to the lazy provider that calls ffmpeg on demand. Per-batch
-        # extraction means we hold at most `cinematic_batch_size` JPEGs in
-        # RAM at once, instead of pre-extracting one per cue across the whole
-        # film and stuffing the dict.
-        user_content: list[ContentBlock] = []
-        if context and context.has_cue_frames():
-            for c in batch:
-                kf = context.frame_for(c.id)
-                if not kf:
-                    continue
-                user_content.append(TextContent(text=f"Frame for cue {c.id}:"))
-                user_content.append(ImageContent(data=kf, media_type="image/jpeg"))
-        user_content.append(TextContent(text=json.dumps(payload, ensure_ascii=False)))
+        user_content: list[ContentBlock] = [
+            TextContent(text=json.dumps(payload, ensure_ascii=False)),
+        ]
 
-        # Build the system: principles (cacheable) + optional scene bible (cacheable)
-        # + per-job lang config (cacheable, last → caches everything before too).
-        system: list[SystemBlock] = [SystemBlock(text=_SYSTEM_PROMPT, cacheable=True)]
-        if context and context.scenes:
-            bible = [
-                {"index": s.index, "start": round(s.start, 2), "end": round(s.end, 2),
-                 "description": s.description}
-                for s in context.scenes if s.description
-            ]
-            if bible:
-                system.append(SystemBlock(
-                    text=("Scene bible (visual context for the whole film — do not translate this):\n"
-                          + json.dumps(bible, ensure_ascii=False)),
-                    cacheable=True,
-                ))
-        system.append(SystemBlock(
-            text=f"Source language: {source_lang}\nTarget language: {target_lang}",
-            cacheable=True,
-        ))
+        # System prefix: cacheable principles, then per-job lang config
+        # (cacheable too — putting it last lets the LLM provider's
+        # cache mark every preceding block as cacheable in a single
+        # marker).
+        system: list[SystemBlock] = [
+            SystemBlock(text=_SYSTEM_PROMPT, cacheable=True),
+            SystemBlock(
+                text=f"Source language: {source_lang}\nTarget language: {target_lang}",
+                cacheable=True,
+            ),
+        ]
 
         try:
             text = self._client.chat(

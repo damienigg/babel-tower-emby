@@ -1,10 +1,15 @@
 """Processor validation tests. Heavy externals (ffmpeg, Whisper, LLM) are
-mocked — we only want to verify the validation gates and error mapping."""
+mocked — we only want to verify the validation gates and error mapping.
+
+Pre-0.7.32 this file also covered mode validation (scene-mode requires
+the LLM provider, scene-mode requires vision_llm_enabled, cinematic-
+mode requires a vision-capable translation LLM). With scene/cinematic
+modes removed those gates went too — every job is now audio mode
+implicitly."""
 import pytest
 
-from app.config import settings
 from app.processor import (
-    BadRequest, MediaNotFound, ProcessRequest, SUPPORTED_MODES, process,
+    MediaNotFound, ProcessRequest, process,
 )
 
 
@@ -14,49 +19,14 @@ def _req(**overrides):
         target_lang="fr",
         source_lang_priority=["en", "*"],
         translation_provider="llm",
-        mode="audio",
     )
     base.update(overrides)
     return ProcessRequest(**base)
 
 
-def test_unknown_mode_raises_bad_request():
-    with pytest.raises(BadRequest, match="unknown mode"):
-        process(_req(mode="bogus"))
-
-
-def test_supported_modes_cover_documented_set():
-    assert "audio" in SUPPORTED_MODES
-    assert "scene" in SUPPORTED_MODES
-    assert "cinematic" in SUPPORTED_MODES
-
-
-def test_scene_mode_requires_llm_provider(monkeypatch):
-    monkeypatch.setattr(settings, "_overrides",
-                        {**settings._overrides, "vision_llm_enabled": True})
-    with pytest.raises(BadRequest, match="translation_provider='llm'"):
-        process(_req(mode="scene", translation_provider="deepl"))
-
-
-def test_scene_mode_requires_vision_enabled(monkeypatch):
-    monkeypatch.setattr(settings, "_overrides",
-                        {**settings._overrides, "vision_llm_enabled": False})
-    with pytest.raises(BadRequest, match="Vision LLM"):
-        process(_req(mode="scene"))
-
-
-def test_cinematic_mode_requires_translation_vision(monkeypatch):
-    monkeypatch.setattr(settings, "_overrides",
-                        {**settings._overrides,
-                         "vision_llm_enabled": True,
-                         "translation_llm_supports_vision": False})
-    with pytest.raises(BadRequest, match="cinematic"):
-        process(_req(mode="cinematic"))
-
-
-def test_audio_mode_with_missing_media_raises_media_not_found():
+def test_missing_media_raises_media_not_found():
     with pytest.raises(MediaNotFound):
-        process(_req(mode="audio", media_path="/no/such/file.mkv"))
+        process(_req(media_path="/no/such/file.mkv"))
 
 
 def test_cancel_during_translate_does_not_leave_cache_entry(monkeypatch, tmp_path):
@@ -113,7 +83,7 @@ def test_cancel_during_translate_does_not_leave_cache_entry(monkeypatch, tmp_pat
     # user clicks cancel between batches. The pipeline must propagate this
     # without writing the cache.
     class CancelingProvider:
-        def translate(self, cues, source_lang, target_lang, context=None,
+        def translate(self, cues, source_lang, target_lang,
                       *, progress=None, check_cancel=None):
             raise JobCanceled("user clicked cancel")
 
@@ -121,7 +91,7 @@ def test_cancel_during_translate_does_not_leave_cache_entry(monkeypatch, tmp_pat
     # process() resolves to our canceling stub instead of trying to load
     # the real NLLB provider (which would download HF weights).
     monkeypatch.setattr(processor_mod, "get_provider", lambda name: CancelingProvider())
-    req = _req(mode="audio", media_path=str(media), translation_provider="nllb")
+    req = _req(media_path=str(media), translation_provider="nllb")
 
     with pytest.raises(JobCanceled):
         process(req)
@@ -165,7 +135,7 @@ def test_cancel_during_transcribe_does_not_leave_cache_entry(monkeypatch, tmp_pa
         raise JobCanceled("user clicked cancel during transcribe")
     monkeypatch.setattr(stt, "transcribe", canceling_transcribe)
 
-    req = _req(mode="audio", media_path=str(media), translation_provider="nllb")
+    req = _req(media_path=str(media), translation_provider="nllb")
     with pytest.raises(JobCanceled):
         process(req)
     assert list(cache_dir.glob("*.json")) == []
@@ -239,12 +209,12 @@ def test_transcript_cache_hit_skips_audio_extract_and_whisper(monkeypatch, tmp_p
 
     # Trivial provider just to let process() complete.
     class PassThroughProvider:
-        def translate(self, cues, source_lang, target_lang, context=None,
+        def translate(self, cues, source_lang, target_lang,
                       *, progress=None, check_cancel=None):
             return list(cues)
     monkeypatch.setattr(processor_mod, "get_provider", lambda name: PassThroughProvider())
 
-    req = _req(mode="audio", media_path=str(media), translation_provider="nllb")
+    req = _req(media_path=str(media), translation_provider="nllb")
     result = processor_mod.process(req)
 
     assert calls["extract"] == 0, "transcript cache hit must skip audio extraction"
@@ -295,7 +265,7 @@ def test_transcript_cache_stored_after_successful_transcribe(monkeypatch, tmp_pa
     # the time it runs.
     seen_at_translate_time = {}
     class CheckingProvider:
-        def translate(self, cues, source_lang, target_lang, context=None,
+        def translate(self, cues, source_lang, target_lang,
                       *, progress=None, check_cancel=None):
             content_fp = cache_mod.content_fingerprint(media)
             hit = transcript_cache.lookup(
@@ -309,7 +279,7 @@ def test_transcript_cache_stored_after_successful_transcribe(monkeypatch, tmp_pa
             return list(cues)
     monkeypatch.setattr(processor_mod, "get_provider", lambda name: CheckingProvider())
 
-    req = _req(mode="audio", media_path=str(media), translation_provider="nllb")
+    req = _req(media_path=str(media), translation_provider="nllb")
     processor_mod.process(req)
 
     assert seen_at_translate_time["hit"], (

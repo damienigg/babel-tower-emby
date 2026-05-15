@@ -53,13 +53,10 @@ class DeepLProvider:
         cues: list[Cue],
         source_lang: str,
         target_lang: str,
-        context=None,
         *,
         progress: Callable[[float], None] = _noop_progress,
         check_cancel: Callable[[], None] = _noop_cancel,
     ) -> list[Cue]:
-        # DeepL is text-only — `context` (scene bible / per-cue frames) is silently
-        # ignored. The processor enforces that scene/cinematic modes use the LLM provider.
         if target_lang not in _TARGET_LANG:
             raise TranslationError(f"DeepL does not support target language {target_lang!r}")
 

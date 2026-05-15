@@ -102,11 +102,9 @@ def test_settings_page_renders_with_cost_aware_labels(client):
     body = r.text
     # Per-section descriptions still carry the cost framing
     assert "ALWAYS FREE" in body                           # STT section
-    assert "cost/complexity lever" in body                 # Defaults section
     # Cost-aware option labels rendered in the dropdowns
     assert "[FREE · LOCAL]" in body                        # nllb option
     assert "[FREE TIER 500k chars/mo · CLOUD beyond]" in body   # deepl option
-    assert "[+0 LLM calls beyond translation]" in body     # audio mode option
     # The standalone hero card is gone.
     assert "hero-cost-ladder" not in body
 
@@ -311,7 +309,7 @@ def test_settings_page_renders(client):
     r = client.get("/settings")
     assert r.status_code == 200
     # Each section heading should appear
-    for section in ("Translation model", "Vision model", "Speech-to-Text", "Defaults"):
+    for section in ("Translation model", "Speech-to-Text", "Defaults"):
         assert section in r.text
 
 
@@ -695,7 +693,6 @@ def test_onboarding_save_redirects_to_library(client, monkeypatch):
             "media_server_url": "http://emby.lan:8096",
             "media_server_api_key": "test-key",
             "default_target_lang": "fr",
-            "default_mode": "audio",
             "default_translation_provider": "nllb",
         },
         follow_redirects=False,

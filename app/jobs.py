@@ -50,7 +50,11 @@ class Job:
     item_name: str
     target_lang: str
     provider: str
-    mode: str
+    # ``mode`` is vestigial since 0.7.32 — scene/cinematic modes were
+    # removed and only "audio" survives. The field stays on the
+    # dataclass so old jobs.json records (which always carried a mode)
+    # deserialize cleanly. New jobs always get "audio".
+    mode: str = "audio"
     status: str = "queued"           # queued | running | succeeded | failed | canceled
     error: str | None = None
     # Full Python traceback captured at failure time. The short ``error``
@@ -239,7 +243,6 @@ def submit(
     item_name: str,
     target_lang: str,
     provider: str,
-    mode: str,
     runner: Callable[[Job], Awaitable[None]],
     whisper_model: str | None = None,
     translation_model: str | None = None,
@@ -255,7 +258,6 @@ def submit(
         item_name=item_name,
         target_lang=target_lang,
         provider=provider,
-        mode=mode,
         whisper_model=whisper_model,
         translation_model=translation_model,
     )

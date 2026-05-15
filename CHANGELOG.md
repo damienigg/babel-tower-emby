@@ -7,6 +7,112 @@ expect breaking changes between minor versions until 1.0.
 
 ## [Unreleased]
 
+## [0.7.32] — 2026-05-15
+
+### Removed
+
+- **Scene + cinematic translation modes deleted entirely.** Pre-0.7.32
+  the pipeline supported three modes: ``audio`` (Whisper → text-only
+  translation), ``scene`` (adds an LLM-vision scene bible — one short
+  description per detected shot, sent as cached system context to the
+  translator), and ``cinematic`` (everything scene does + a per-cue
+  keyframe attached as an image block to each translation call).
+  Both multimodal modes were retired because they added significant
+  UI/code complexity for marginal subtitle-quality improvement —
+  the same disambiguation usually falls out of the surrounding
+  dialog Whisper already captures, and a Vision-LLM-enabled host
+  is a steep prerequisite for what's typically a small per-cue gain.
+
+  What disappears with them:
+  - The mode picker in **Settings** (``default_mode``).
+  - The **Mode** column in the Jobs table.
+  - The mode picker in the **Library** filter form + per-row "+ Batch"
+    panel.
+  - The **Vision model** settings section (entire LLM slot for
+    keyframe-describing — its config fields are gone too).
+  - The **Scene & Cinematic** settings section (detection threshold,
+    keyframe size, batch size, etc.).
+  - The mode-selection step in the **Onboarding wizard**.
+  - The vision card on the **Dashboard**.
+  - Three pipeline modules deleted on disk:
+    ``app/pipeline/scenes.py``, ``app/pipeline/scene_bible.py``,
+    ``app/pipeline/frames.py``.
+  - ``_build_context`` in ``app/processor.py``,
+    ``TranslationContext`` + ``SceneInfo`` in
+    ``app/pipeline/translate/base.py``, the
+    ``validate_mode_provider_combo`` validator, the
+    ``get_vision_llm`` factory, and ~200 lines of
+    scene-bible-prefix / per-cue-image-block plumbing in
+    ``app/pipeline/translate/llm.py``.
+  - The ``mode`` field on the API request schema and on the
+    ``ProcessRequest`` / ``ProcessResult`` dataclasses (the field on
+    ``Job`` stays vestigial so old jobs.json records still
+    deserialize, but every new job records ``"audio"``).
+
+- **``openvino_device`` setting hidden from the Settings UI.** It was
+  always documented as "AUTO is the right answer; switch to GPU/CPU
+  only for explicit debugging". Removing it from the UI completes
+  that intent. The field stays in the config model so
+  ``BABEL_OPENVINO_DEVICE=GPU`` env override still works for power
+  users who want explicit forcing.
+
+### Changed
+
+- **VTT output filename simplified.** New jobs write
+  ``Inception.fr.ai.vtt`` instead of ``Inception.fr.audio.ai.vtt`` —
+  the mode infix served no purpose now that there's only one mode.
+  Existing ``.fr.audio.ai.vtt`` files on disk continue to be
+  recognised by the Cache Explorer's media-name extractor (the
+  legacy infix is stripped during parsing); the repolish endpoint
+  detects which filename actually exists and overwrites in place.
+
+- **Cache key no longer keyed on ``mode``, ``scene_threshold``, or
+  ``vision_llm_model``.** Existing cache entries that were keyed
+  under ``mode=audio`` continue to hit (their hash is unchanged
+  because the audio path didn't contribute scene_threshold or
+  vision_llm_model anyway). Entries keyed under ``mode=scene`` or
+  ``mode=cinematic`` become unreachable orphans on disk — safe to
+  leave or sweep manually.
+
+### Migration
+
+- New ``_drop_mode_scene_cinematic_vision_fields`` migration strips
+  the obsolete settings fields from persisted ``settings.json`` files
+  on next load: ``default_mode``, ``scene_*``, ``cinematic_*``,
+  ``vision_llm_*``, ``translation_llm_supports_vision``. Idempotent.
+
+### Tests
+
+- Deleted ``tests/test_scenes.py`` (the entire scene-detection module
+  is gone).
+- ``tests/test_perf_hardening.py`` and ``tests/test_p2_hardening.py``
+  trimmed down — kept the audio-temp-dir, settings-COW, LLM-retries,
+  STT-release tests; deleted the scene_bible lazy-keyframe-provider
+  tests, the cinematic frame-ffmpeg-args tests, and the mode-Literal
+  schema rejection test.
+- ``tests/test_translate_llm.py`` rewritten: kept happy-path,
+  length-mismatch, missing-id, invalid-JSON, batch-size, and lang-pair
+  system-block tests; deleted cinematic-batch-size, vision-gating,
+  scene-bible-payload, per-cue-image-block, and cue-scene-annotation
+  tests.
+- ``tests/test_resource_safety.py`` trimmed: kept Job timeout +
+  settings + pydantic-bound tests; deleted the
+  ``TranslationContext.frame_for`` / ``has_cue_frames`` /
+  whitelist tests and the ``scene_max_scenes`` /
+  ``cinematic_max_cues_with_frames`` bounds tests.
+- ``tests/test_processor.py`` trimmed: kept the cancel-doesn't-leave-
+  cache and transcript-cache-resume tests; deleted the mode/provider
+  validation tests.
+- ``tests/test_config.py`` ``test_*_migration`` tests updated to
+  assert that ``vision_llm_*`` and ``translation_llm_supports_vision``
+  are STRIPPED from migrated settings (the new migration runs after
+  the legacy unifier and removes them).
+- ``tests/test_ui_coerce.py``, ``tests/test_cache.py``,
+  ``tests/test_jobs.py``, ``tests/test_jobs_persistence.py``,
+  ``tests/test_smoke_api.py`` updated to drop ``mode``,
+  ``scene_threshold``, ``vision_llm_model``, ``default_mode``,
+  ``"Vision model"`` references from their assertions and fixtures.
+
 ## [0.7.31] — 2026-05-15
 
 ### Changed

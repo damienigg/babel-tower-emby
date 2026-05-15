@@ -25,55 +25,30 @@ def test_quick_fingerprint_changes_on_mtime(tmp_path):
 
 
 def test_cache_key_is_deterministic():
-    args = ("fp123", "fr", "small", "llm", ["en", "ja"], "audio")
+    args = ("fp123", "fr", "small", "llm", ["en", "ja"])
     assert cache.cache_key(*args) == cache.cache_key(*args)
-
-
-def test_cache_key_includes_threshold_only_when_provided():
-    base = cache.cache_key("fp", "fr", "small", "llm", ["en"], "audio")
-    with_threshold = cache.cache_key("fp", "fr", "small", "llm", ["en"], "scene", scene_threshold=0.4)
-    assert base != with_threshold
-
-    same_threshold = cache.cache_key("fp", "fr", "small", "llm", ["en"], "scene", scene_threshold=0.4)
-    diff_threshold = cache.cache_key("fp", "fr", "small", "llm", ["en"], "scene", scene_threshold=0.5)
-    assert same_threshold != diff_threshold
 
 
 def test_cache_key_distinguishes_translation_llm_models():
     """Switching the translation LLM (claude-opus → gpt-4o → qwen2.5:72b) must
     invalidate the cache so we don't serve a stale Claude translation as if it
     were the new model's output."""
-    a = cache.cache_key("fp", "fr", "small", "llm", ["en"], "audio",
+    a = cache.cache_key("fp", "fr", "small", "llm", ["en"],
                         translation_llm_model="claude-opus-4-7")
-    b = cache.cache_key("fp", "fr", "small", "llm", ["en"], "audio",
+    b = cache.cache_key("fp", "fr", "small", "llm", ["en"],
                         translation_llm_model="gpt-4o")
-    c = cache.cache_key("fp", "fr", "small", "llm", ["en"], "audio",
+    c = cache.cache_key("fp", "fr", "small", "llm", ["en"],
                         translation_llm_model="qwen2.5:72b")
     assert len({a, b, c}) == 3
-
-
-def test_cache_key_distinguishes_vision_llm_models_in_scene_mode():
-    """In scene/cinematic, the bible depends on which LLM described the
-    keyframes — a different vision model produces different descriptions and
-    therefore a different translation."""
-    a = cache.cache_key("fp", "fr", "small", "llm", ["en"], "scene",
-                        scene_threshold=0.4,
-                        translation_llm_model="claude-opus-4-7",
-                        vision_llm_model="claude-opus-4-7")
-    b = cache.cache_key("fp", "fr", "small", "llm", ["en"], "scene",
-                        scene_threshold=0.4,
-                        translation_llm_model="claude-opus-4-7",
-                        vision_llm_model="qwen2.5-vl:72b")
-    assert a != b
 
 
 def test_cache_key_omits_llm_args_when_none():
     """Callers pass None for non-llm providers — those should produce the same
     key as omitting the kwarg entirely, so DeepL/NLLB jobs don't accidentally
     fragment the cache."""
-    a = cache.cache_key("fp", "fr", "small", "deepl", ["en"], "audio")
-    b = cache.cache_key("fp", "fr", "small", "deepl", ["en"], "audio",
-                        translation_llm_model=None, vision_llm_model=None)
+    a = cache.cache_key("fp", "fr", "small", "deepl", ["en"])
+    b = cache.cache_key("fp", "fr", "small", "deepl", ["en"],
+                        translation_llm_model=None)
     assert a == b
 
 
@@ -82,8 +57,8 @@ def test_cache_key_distinguishes_vad_enabled_for_openvino_runs():
     (silence-region hallucinations vs. clean output). Toggling it must
     produce a different cache key so the user doesn't get the old
     pre-VAD result back on re-run."""
-    a = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio", vad_enabled=True)
-    b = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio", vad_enabled=False)
+    a = cache.cache_key("fp", "fr", "small", "nllb", ["en"], vad_enabled=True)
+    b = cache.cache_key("fp", "fr", "small", "nllb", ["en"], vad_enabled=False)
     assert a != b
 
 
@@ -93,8 +68,8 @@ def test_cache_key_omits_vad_when_none():
     user-facing setting doesn't fragment the CPU-backend cache. None must
     also match the pre-flag key shape so existing entries written before
     the flag existed still resolve identically."""
-    a = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio")
-    b = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio", vad_enabled=None)
+    a = cache.cache_key("fp", "fr", "small", "nllb", ["en"])
+    b = cache.cache_key("fp", "fr", "small", "nllb", ["en"], vad_enabled=None)
     assert a == b
 
 
@@ -104,8 +79,8 @@ def test_cache_key_pre_vad_entry_does_not_resolve_for_openvino_user():
     the change, OpenVINO lookups pass vad_enabled=True. Those keys MUST
     differ — otherwise the user gets the old hallucinated VTT back from
     cache and never sees the fix."""
-    pre_vad = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio")
-    new_with_vad = cache.cache_key("fp", "fr", "small", "nllb", ["en"], "audio",
+    pre_vad = cache.cache_key("fp", "fr", "small", "nllb", ["en"])
+    new_with_vad = cache.cache_key("fp", "fr", "small", "nllb", ["en"],
                                    vad_enabled=True)
     assert pre_vad != new_with_vad
 
@@ -248,11 +223,11 @@ def test_two_level_lookup_hits_content_fp_after_mtime_bump(tmp_path, monkeypatch
     media = _make_media_file(tmp_path / "movie.mkv")
     key_kwargs = dict(
         target_lang="fr", model="small", provider="nllb",
-        source_priority=["en"], mode="audio",
+        source_priority=["en"],
     )
     payload = {"vtt": "WEBVTT", "cue_count": 1,
                "source_track": {"index": 1, "language": None, "title": None},
-               "detected_source_language": "en", "mode": "audio"}
+               "detected_source_language": "en"}
 
     cache.store_two_level(media, payload, **key_kwargs)
 
@@ -279,11 +254,11 @@ def test_two_level_lookup_invalidates_on_real_content_change(tmp_path, monkeypat
     media = _make_media_file(tmp_path / "movie.mkv")
     key_kwargs = dict(
         target_lang="fr", model="small", provider="nllb",
-        source_priority=["en"], mode="audio",
+        source_priority=["en"],
     )
     cache.store_two_level(media, {"vtt": "WEBVTT", "cue_count": 1,
                                   "source_track": {"index": 1, "language": None, "title": None},
-                                  "detected_source_language": "en", "mode": "audio"},
+                                  "detected_source_language": "en"},
                          **key_kwargs)
 
     # Re-encode simulation: mutate bytes near the midpoint.
@@ -314,11 +289,11 @@ def test_two_level_lookup_skips_content_read_on_quick_hit(tmp_path, monkeypatch)
     media = _make_media_file(tmp_path / "movie.mkv")
     key_kwargs = dict(
         target_lang="fr", model="small", provider="nllb",
-        source_priority=["en"], mode="audio",
+        source_priority=["en"],
     )
     cache.store_two_level(media, {"vtt": "x", "cue_count": 1,
                                   "source_track": {"index": 1, "language": None, "title": None},
-                                  "detected_source_language": "en", "mode": "audio"},
+                                  "detected_source_language": "en"},
                          **key_kwargs)
 
     def boom(_):

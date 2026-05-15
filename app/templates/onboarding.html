@@ -117,21 +117,6 @@
       </div>
 
       <div class="field">
-        <label for="default_mode"><strong>Mode</strong></label>
-        {% set _cur_mode = values.get('default_mode', 'audio') %}
-        <select id="default_mode" name="default_mode">
-          <option value="audio"      {% if _cur_mode == 'audio' %}selected{% endif %}>audio · simplest, no extra cost</option>
-          <option value="scene"      {% if _cur_mode == 'scene' %}selected{% endif %}>scene · adds ~20 vision-LLM calls per film (better pronouns/gender)</option>
-          <option value="cinematic"  {% if _cur_mode == 'cinematic' %}selected{% endif %}>cinematic · LLM sees each cue's frame (best, slowest)</option>
-        </select>
-        <p class="field-help">
-          <strong>audio</strong> is the recommended starting point. Scene
-          and cinematic require an LLM-based provider (see below) and
-          a vision-capable model.
-        </p>
-      </div>
-
-      <div class="field">
         <label for="default_translation_provider"><strong>Translator</strong></label>
         {% set _cur_prov = values.get('default_translation_provider', 'nllb') %}
         <select id="default_translation_provider" name="default_translation_provider">

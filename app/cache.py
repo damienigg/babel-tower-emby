@@ -94,30 +94,34 @@ def cache_key(
     model: str,
     provider: str,
     source_priority: list[str],
-    mode: str,
     *,
-    scene_threshold: float | None = None,
     translation_llm_model: str | None = None,
-    vision_llm_model: str | None = None,
     vad_enabled: bool | None = None,
 ) -> str:
     """Build a stable cache key. Each kwarg is included only when relevant —
     callers pass None for kwargs that don't affect the output for their request:
 
-    - `scene_threshold`: relevant for scene/cinematic modes. Different threshold
-      → different scene bible → different final VTT.
     - `translation_llm_model`: relevant when provider="llm". Different LLM model
       → different translation output. Switching the configured translation
       model (e.g. claude-opus-4-7 → gpt-4o → qwen2.5:72b) must invalidate the
       cache.
-    - `vision_llm_model`: relevant for scene/cinematic modes (the bible content
-      depends on which LLM described the keyframes).
     - `vad_enabled`: relevant only for the OpenVINO STT backend, where the
       VAD pre-filter materially changes the cue list (silence-region
       hallucinations vs. clean output). The CPU/`faster-whisper` backend has
       its own internal VAD unrelated to this flag, so callers pass None for
       it. Pre-VAD entries (written before the flag existed) used None as
       well, so they get cleanly invalidated when the new code passes True.
+
+    Pre-0.7.32 the key also incorporated ``mode`` (audio/scene/cinematic),
+    ``scene_threshold``, and ``vision_llm_model``. With scene/cinematic
+    removed those dimensions collapse — every key now implicitly means
+    audio mode. Existing cache entries that were keyed under
+    ``mode=audio`` continue to match (their hash didn't change because
+    "audio" / no-scene-threshold / no-vision-llm-model were all that
+    contributed to the audio path anyway). Entries keyed under
+    mode=scene or mode=cinematic become unreachable orphans on disk —
+    safe to leave (they don't hurt anything) or sweep with
+    cache_dir/cleanup if you want.
     """
     parts = [
         media_fingerprint,
@@ -125,14 +129,9 @@ def cache_key(
         model,
         provider,
         ",".join(source_priority),
-        mode,
     ]
-    if scene_threshold is not None:
-        parts.append(f"thr={scene_threshold:.3f}")
     if translation_llm_model:
         parts.append(f"tllm={translation_llm_model}")
-    if vision_llm_model:
-        parts.append(f"vllm={vision_llm_model}")
     if vad_enabled is not None:
         parts.append(f"vad={int(vad_enabled)}")
     raw = "|".join(parts)
@@ -170,10 +169,7 @@ def lookup_two_level(
     model: str,
     provider: str,
     source_priority: list[str],
-    mode: str,
-    scene_threshold: float | None = None,
     translation_llm_model: str | None = None,
-    vision_llm_model: str | None = None,
     vad_enabled: bool | None = None,
 ) -> tuple[dict | None, str, str]:
     """Look up a cached payload using both fingerprints. Returns
@@ -188,10 +184,8 @@ def lookup_two_level(
     """
     key_kwargs = dict(
         target_lang=target_lang, model=model, provider=provider,
-        source_priority=source_priority, mode=mode,
-        scene_threshold=scene_threshold,
+        source_priority=source_priority,
         translation_llm_model=translation_llm_model,
-        vision_llm_model=vision_llm_model,
         vad_enabled=vad_enabled,
     )
     quick_fp = quick_fingerprint(media)
@@ -224,20 +218,15 @@ def store_two_level(
     model: str,
     provider: str,
     source_priority: list[str],
-    mode: str,
-    scene_threshold: float | None = None,
     translation_llm_model: str | None = None,
-    vision_llm_model: str | None = None,
     vad_enabled: bool | None = None,
 ) -> None:
     """Store the payload under both the quick and content keys so future
     lookups can hit either one."""
     key_kwargs = dict(
         target_lang=target_lang, model=model, provider=provider,
-        source_priority=source_priority, mode=mode,
-        scene_threshold=scene_threshold,
+        source_priority=source_priority,
         translation_llm_model=translation_llm_model,
-        vision_llm_model=vision_llm_model,
         vad_enabled=vad_enabled,
     )
     quick_fp = quick_fingerprint(media)

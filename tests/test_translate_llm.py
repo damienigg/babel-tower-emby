@@ -7,22 +7,25 @@ Coverage:
 - length-mismatch detection (LLM returns N != len(input) cues)
 - missing-id detection (LLM returns the right count but wrong ids)
 - invalid-JSON detection
-- batch-size selection (text-only vs cinematic)
-- cinematic-mode vision-capability gating
+- batch-size selection (translation_batch_size)
 - LLMError → TranslationError translation
-- scene-bible payload structure (system blocks, cue annotations)
+- lang-pair system block shape
+
+Pre-0.7.32 this file also covered scene/cinematic-specific payload
+shape (scene bible, per-cue image blocks, cue-to-scene annotations)
+and the cinematic batch-size + vision-gating paths. With scene and
+cinematic modes removed those tests went too — the provider is now
+text-only.
 """
 from dataclasses import dataclass
 
 import pytest
 
 from app.pipeline.llm.base import (
-    ContentBlock, ImageContent, LLMError, SystemBlock, TextContent,
+    ContentBlock, LLMError, SystemBlock, TextContent,
 )
 from app.pipeline.stt import Cue
-from app.pipeline.translate.base import (
-    SceneInfo, TranslationContext, TranslationError,
-)
+from app.pipeline.translate.base import TranslationError
 
 
 # ── Fake LLM client ──────────────────────────────────────────────────────────
@@ -31,7 +34,7 @@ from app.pipeline.translate.base import (
 @dataclass
 class _FakeChat:
     """One observed call to chat(). The provider's tests assert on these to
-    verify the payload it built (batch size, scene bible, frames, etc.)."""
+    verify the payload it built (batch size, system shape, etc.)."""
     system: list[SystemBlock]
     content: list[ContentBlock]
     max_tokens: int
@@ -46,7 +49,7 @@ class FakeLLM:
         self,
         responses: list[str] | None = None,
         raises: Exception | None = None,
-        supports_vision_value: bool = True,
+        supports_vision_value: bool = False,
     ) -> None:
         self.responses = list(responses or [])
         self.raises = raises
@@ -152,7 +155,8 @@ def test_translate_wraps_llm_errors_as_translation_errors(monkeypatch):
 
 def test_text_only_batches_use_translation_batch_size(monkeypatch):
     """30-cue input with translation_batch_size=10 should hit the LLM 3
-    times (no cue_frames context → text-only batching)."""
+    times. Only one batch size knob remains since scene/cinematic was
+    removed."""
     from app.config import settings as _settings
     monkeypatch.setattr(_settings, "_overrides",
                         {**_settings._overrides, "translation_batch_size": 10})
@@ -168,72 +172,7 @@ def test_text_only_batches_use_translation_batch_size(monkeypatch):
     assert len(fake.calls) == 3
 
 
-def test_cinematic_uses_cinematic_batch_size(monkeypatch):
-    """When context carries cue_frames (cinematic mode), the smaller
-    cinematic_batch_size kicks in instead of translation_batch_size."""
-    from app.config import settings as _settings
-    monkeypatch.setattr(_settings, "_overrides",
-                        {**_settings._overrides,
-                         "translation_batch_size": 30,
-                         "cinematic_batch_size": 4})
-    cues = _cues(10)
-    # 10 cues / batch 4 → 3 calls (4 + 4 + 2)
-    fake = FakeLLM(responses=[
-        _ok_response_for(cues[:4]),
-        _ok_response_for(cues[4:8]),
-        _ok_response_for(cues[8:]),
-    ])
-    provider = _make_provider(fake, monkeypatch)
-    ctx = TranslationContext(
-        scenes=[],
-        cue_to_scene={},
-        cue_frames={c.id: b"\xff\xd8\xff" for c in cues},  # fake JPEGs
-    )
-    out = provider.translate(cues, "en", "fr", context=ctx)
-    assert len(out) == 10
-    assert len(fake.calls) == 3
-
-
-# ── Cinematic vision-capability gating ───────────────────────────────────────
-
-
-def test_cinematic_with_non_vision_llm_raises_clearly(monkeypatch):
-    """User's LLM doesn't support vision but they ran cinematic mode —
-    we must catch this before paying for a single LLM call."""
-    cues = _cues(3)
-    fake = FakeLLM(supports_vision_value=False)
-    provider = _make_provider(fake, monkeypatch)
-    ctx = TranslationContext(
-        scenes=[], cue_to_scene={},
-        cue_frames={c.id: b"\xff" for c in cues},
-    )
-    with pytest.raises(TranslationError, match="vision-capable"):
-        provider.translate(cues, "en", "fr", context=ctx)
-    # Crucially: NO LLM call was made — we'd have wasted user $$$ for nothing.
-    assert fake.calls == []
-
-
 # ── Payload shape ────────────────────────────────────────────────────────────
-
-
-def test_system_includes_scene_bible_when_provided(monkeypatch):
-    """In scene/cinematic, the system prompt should carry both the static
-    principles AND the per-film bible — and the bible should be flagged
-    cacheable so Anthropic prompt-caching kicks in."""
-    cues = _cues(2)
-    fake = FakeLLM(responses=[_ok_response_for(cues)])
-    provider = _make_provider(fake, monkeypatch)
-    ctx = TranslationContext(
-        scenes=[SceneInfo(index=0, start=0.0, end=10.0, description="A train station at dusk.")],
-        cue_to_scene={0: 0, 1: 0},
-        cue_frames={},  # text-only scene mode
-    )
-    provider.translate(cues, "en", "fr", context=ctx)
-    call = fake.calls[0]
-    bible_blocks = [b for b in call.system if "Scene bible" in b.text]
-    assert len(bible_blocks) == 1
-    assert "train station at dusk" in bible_blocks[0].text
-    assert bible_blocks[0].cacheable is True
 
 
 def test_lang_pair_appears_in_system(monkeypatch):
@@ -249,45 +188,21 @@ def test_lang_pair_appears_in_system(monkeypatch):
     assert len(lang_blocks) == 1
 
 
-def test_cinematic_attaches_per_cue_image_blocks(monkeypatch):
-    """Cinematic mode interleaves an ImageContent block per cue alongside
-    the JSON payload. The label `Frame for cue N:` keeps the LLM oriented."""
-    cues = _cues(2)
-    fake = FakeLLM(responses=[_ok_response_for(cues)])
-    provider = _make_provider(fake, monkeypatch)
-    ctx = TranslationContext(
-        scenes=[], cue_to_scene={},
-        cue_frames={0: b"\xff\xd8frame0", 1: b"\xff\xd8frame1"},
-    )
-    provider.translate(cues, "en", "fr", context=ctx)
-    content = fake.calls[0].content
-    # First two pairs are (TextContent label, ImageContent), then the JSON payload.
-    assert isinstance(content[0], TextContent)
-    assert "Frame for cue 0" in content[0].text
-    assert isinstance(content[1], ImageContent)
-    assert content[1].data == b"\xff\xd8frame0"
-    assert isinstance(content[2], TextContent)
-    assert "Frame for cue 1" in content[2].text
-    assert isinstance(content[3], ImageContent)
-    # Last block is the JSON cue payload.
-    assert isinstance(content[-1], TextContent)
-    assert '"line 0"' in content[-1].text
-
-
-def test_cue_scene_annotation_when_cue_to_scene_maps(monkeypatch):
-    """Scene mode (no cue_frames) annotates each cue in the JSON payload
-    with the description of the scene it belongs to. The bible itself stays
-    in the system; the inline annotation is shorthand for the LLM."""
+def test_user_content_is_just_the_cue_json(monkeypatch):
+    """Post-0.7.32 the user content is exactly one TextContent block
+    carrying the JSON cue list — no image blocks, no per-cue labels.
+    Pinning this stops a future refactor from accidentally reintroducing
+    multimodal plumbing."""
     import json
     cues = _cues(2)
     fake = FakeLLM(responses=[_ok_response_for(cues)])
     provider = _make_provider(fake, monkeypatch)
-    ctx = TranslationContext(
-        scenes=[SceneInfo(index=0, start=0.0, end=10.0, description="Café interior")],
-        cue_to_scene={0: 0},  # only cue 0 mapped — cue 1 gets no scene annotation
-        cue_frames={},
-    )
-    provider.translate(cues, "en", "fr", context=ctx)
-    payload = json.loads(fake.calls[0].content[-1].text)
-    assert payload[0]["scene"] == "Café interior"
-    assert "scene" not in payload[1]
+    provider.translate(cues, "en", "fr")
+    content = fake.calls[0].content
+    assert len(content) == 1
+    assert isinstance(content[0], TextContent)
+    payload = json.loads(content[0].text)
+    assert [p["id"] for p in payload] == [0, 1]
+    assert [p["text"] for p in payload] == ["line 0", "line 1"]
+    # No legacy 'scene' annotation field on any cue.
+    assert all("scene" not in p for p in payload)

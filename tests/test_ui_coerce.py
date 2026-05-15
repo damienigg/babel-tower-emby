@@ -17,13 +17,13 @@ def test_coerce_bool_truthy_strings():
     """HTML checkboxes submit "on" when checked. Python truthy strings
     ("true"/"True"/"1"/"yes") are also accepted for API parity."""
     for raw in ("on", "true", "True", "1", "yes"):
-        assert _coerce("vision_llm_enabled", raw) is True
+        assert _coerce("polish_enabled", raw) is True
 
 
 def test_coerce_bool_falsy_strings():
     """Anything else is False — including empty (unchecked checkbox)."""
     for raw in ("", "off", "false", "False", "0", "no", "anything-else"):
-        assert _coerce("vision_llm_enabled", raw) is False
+        assert _coerce("polish_enabled", raw) is False
 
 
 # ── int ──────────────────────────────────────────────────────────────────────
@@ -45,11 +45,11 @@ def test_coerce_int_empty_string_becomes_zero():
 
 
 def test_coerce_float_parses_decimal():
-    assert _coerce("scene_detection_threshold", "0.4") == 0.4
+    assert _coerce("min_seconds_per_char", "0.4") == 0.4
 
 
 def test_coerce_float_empty_becomes_zero():
-    assert _coerce("scene_detection_threshold", "") == 0.0
+    assert _coerce("min_seconds_per_char", "") == 0.0
 
 
 # ── list[str] ────────────────────────────────────────────────────────────────

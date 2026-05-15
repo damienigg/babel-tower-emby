@@ -117,22 +117,12 @@ class _EnvSettings(BaseSettings):
     vad_enabled: bool = True
 
     # ── Translation LLM ───────────────────────────────────────────────────────
-    # Translates subtitle cues. In cinematic mode, also receives per-cue frames
-    # — must be vision-capable for that path. See translation_llm_supports_vision.
+    # Translates subtitle cues. Text-only since 0.7.32 (the cinematic
+    # mode that attached per-cue frames was removed).
     translation_llm_type: str = "anthropic"   # anthropic | openai_compat
     translation_llm_model: str = "claude-opus-4-7"
     translation_llm_endpoint: str = "https://api.openai.com/v1"
     translation_llm_api_key: str | None = None
-    translation_llm_supports_vision: bool = True
-
-    # ── Vision LLM ────────────────────────────────────────────────────────────
-    # Builds the scene bible: describes each shot's keyframe in 1-2 sentences.
-    # Used by scene + cinematic modes. By construction, must be vision-capable.
-    vision_llm_type: str = "anthropic"
-    vision_llm_model: str = "claude-opus-4-7"
-    vision_llm_endpoint: str = "https://api.openai.com/v1"
-    vision_llm_api_key: str | None = None
-    vision_llm_enabled: bool = True   # toggle off to disable scene/cinematic
 
     # Other translation providers
     deepl_api_key: str | None = None
@@ -280,46 +270,17 @@ class _EnvSettings(BaseSettings):
     #
     # Best-effort — failures don't fail the subtitling job.
     write_detected_language_to_file: bool = True
-    # Quality tier: audio (default) | scene | cinematic.
-    # `scene` adds an LLM-vision scene bible (one short description per shot)
-    # for pronoun/gender disambiguation. `cinematic` additionally attaches
-    # per-cue keyframes to translation calls. Both require
-    # translation_provider="llm" with a vision-capable backend.
-    default_mode: str = "audio"
 
-    # Scene detection (used by scene + cinematic modes). Tuning these lets
-    # operators trade detection sensitivity vs. cost.
-    scene_detection_threshold: float = Field(0.4, ge=0.0, le=1.0)
-    scene_min_length_seconds: float = Field(1.5, ge=0.0, le=60.0)
-    scene_max_scenes: int = Field(500, ge=1, le=2000)
-    scene_keyframe_position: str = "midpoint"      # start | midpoint | end
-    scene_frame_max_size: int = Field(1024, ge=128, le=2048)   # long-edge px sent to the vision LLM
-    scene_bible_batch_size: int = Field(10, ge=1, le=50)        # scenes per vision LLM call
-
-    # Cinematic mode (per-cue frame attachment). Smaller frames + smaller batches
-    # because each call ships up to N images.
-    cinematic_frame_max_size: int = Field(768, ge=128, le=2048)
-    cinematic_batch_size: int = Field(10, ge=1, le=50)
-    # Frame-accurate seek for per-cue extraction. False (default) = fast
-    # input-seek which snaps to the nearest keyframe; on a typical film
-    # with a ~2 s keyframe interval, the extracted JPEG can be up to a
-    # couple seconds off from the cue's actual midpoint. Acceptable for
-    # most use cases (and 5-10× faster). True = combined seek:
-    # `-ss <ts-5> -i <file> -ss 5 -frames:v 1` — fast input seek to ~5s
-    # before, then accurate output seek of 5s. Frame-accurate at the
-    # cost of decoding the intervening ~5s per cue. Recommended only
-    # when extracted frames will be used for fine-grained visual
-    # disambiguation (e.g. lip-sync verification, on-screen text OCR).
-    cinematic_frame_accurate_seek: bool = False
-    # Hard cap on how many cues get a per-cue frame attached. A 2h+ film with
-    # heavy dialog can generate 1500+ cues — pre-extracting one JPEG per cue
-    # and holding them all in RAM (plus base64 inflation per request) is what
-    # blew up the TrueNAS host. With this cap, only the first N cues ship
-    # frames; the remaining cues still translate, just text-only. Set to 0 to
-    # downgrade cinematic to scene-only behavior on every job. The
-    # processor extracts frames lazily per translation batch (not upfront)
-    # so the cap also bounds peak RAM at one batch's worth of JPEGs.
-    cinematic_max_cues_with_frames: int = Field(800, ge=0, le=5000)
+    # Pre-0.7.32 the pipeline supported three modes: ``audio`` (text-
+    # only translation), ``scene`` (adds an LLM-vision scene bible),
+    # and ``cinematic`` (also attaches per-cue keyframes to the
+    # translation calls). The latter two were removed along with
+    # ``default_mode``, ``scene_*``, ``cinematic_*``, and
+    # ``vision_llm_*`` settings; the corresponding pipeline modules
+    # (scenes / scene_bible / frames) and Vision LLM config are gone.
+    # The ``_drop_default_mode_and_scene_cinematic_vision_fields``
+    # migration cleans these out of persisted settings.json files on
+    # next load.
 
     # Hard wall-clock cap on a single job (seconds). Whisper-large on a 3-hour
     # film at int8 on CPU can legitimately take ~2 hours; 5400s (90 min) is a
@@ -376,7 +337,6 @@ class _EnvSettings(BaseSettings):
 # Set of fields that are sensitive — masked in UI GET responses, password input on edit.
 SENSITIVE_FIELDS: set[str] = {
     "translation_llm_api_key",
-    "vision_llm_api_key",
     "deepl_api_key",
     "media_server_api_key",
     "auth_credentials",
@@ -645,6 +605,38 @@ def _rename_emby_to_media_server(data: dict) -> dict:
     return data
 
 
+def _drop_mode_scene_cinematic_vision_fields(data: dict) -> dict:
+    """0.7.32 deleted the scene/cinematic modes entirely (audio mode is
+    the only one that survives) plus all vision-LLM machinery that
+    drove them. Strip the obsolete fields from persisted settings so
+    they don't linger in the file, confuse future readers, or
+    accidentally get rediscovered if we ever re-add a field with the
+    same name. ``_drop_unknown_keys`` would catch them on the same
+    pass, but doing it here explicitly leaves a paper trail."""
+    obsolete = [
+        "default_mode",
+        "scene_detection_threshold",
+        "scene_min_length_seconds",
+        "scene_max_scenes",
+        "scene_keyframe_position",
+        "scene_frame_max_size",
+        "scene_bible_batch_size",
+        "cinematic_frame_max_size",
+        "cinematic_batch_size",
+        "cinematic_frame_accurate_seek",
+        "cinematic_max_cues_with_frames",
+        "vision_llm_type",
+        "vision_llm_model",
+        "vision_llm_endpoint",
+        "vision_llm_api_key",
+        "vision_llm_enabled",
+        "translation_llm_supports_vision",
+    ]
+    for k in obsolete:
+        data.pop(k, None)
+    return data
+
+
 def _collapse_vocal_isolation_enabled_to_mode(data: dict) -> dict:
     """0.7.31 collapsed the two-knob design (``vocal_isolation_enabled``
     bool + ``vocal_isolation_model``) into a single tri-state user
@@ -688,6 +680,7 @@ _MIGRATIONS: list[Callable[[dict], dict]] = [
     _split_unified_llm_into_per_function_slots,
     _drop_shared_anthropic_api_key,
     _rename_emby_to_media_server,
+    _drop_mode_scene_cinematic_vision_fields,
     _collapse_vocal_isolation_enabled_to_mode,
     _drop_unknown_keys,
 ]

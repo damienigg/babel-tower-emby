@@ -29,7 +29,6 @@
           <th>Item</th>
           <th>Progress</th>
           <th>Lang</th>
-          <th>Mode</th>
           <th>STT</th>
           <th>Translation</th>
           <th>Quality</th>
@@ -94,7 +93,6 @@
             {% endif %}
           </td>
           <td>{{ j.target_lang }}</td>
-          <td>{{ j.mode }}</td>
           <td>
             {% if j.whisper_model %}
               <span class="status-pill muted">{{ j.whisper_model }}</span>

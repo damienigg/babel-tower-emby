@@ -1,9 +1,9 @@
-"""LLM client factories — one slot for translation, one for vision.
+"""LLM client factory for the translation slot.
 
-Each slot independently picks a backend (anthropic native or OpenAI-compatible)
-so users can mix-and-match — e.g. cheap fast text model for translation +
-strong vision model for scene descriptions, or a single API key driving both
-when one provider serves both slots.
+Pre-0.7.32 there was a second slot for vision (scene bible building +
+cinematic per-cue frames). Both consumer paths were removed; only the
+translation slot survives. Translation is text-only and does not need
+a vision-capable model.
 """
 from app.config import settings
 from app.pipeline.llm.base import (
@@ -37,32 +37,22 @@ def _build(
 
 
 def get_translation_llm() -> LLMClient:
-    """LLM used for subtitle translation. In cinematic mode, also receives
-    per-cue keyframes — must be vision-capable for that path to work."""
+    """LLM used for subtitle translation. Text-only since 0.7.32 (the
+    vision-aware cinematic path was removed). ``supports_vision`` is
+    hard-coded False below for the openai_compat backend — even if the
+    underlying model can do vision, the translation pipeline doesn't
+    send images anymore."""
     return _build(
         type_=settings.translation_llm_type,
         model=settings.translation_llm_model,
         endpoint=settings.translation_llm_endpoint,
         api_key=settings.translation_llm_api_key,
-        # For openai_compat translation LLMs, vision is optional (only needed for
-        # cinematic mode). Declared via translation_llm_supports_vision.
-        supports_vision=bool(settings.translation_llm_supports_vision),
-    )
-
-
-def get_vision_llm() -> LLMClient:
-    """LLM used for scene-bible building. Always needs vision."""
-    return _build(
-        type_=settings.vision_llm_type,
-        model=settings.vision_llm_model,
-        endpoint=settings.vision_llm_endpoint,
-        api_key=settings.vision_llm_api_key,
-        supports_vision=True,   # vision LLM is by definition vision-capable
+        supports_vision=False,
     )
 
 
 __all__ = [
-    "get_translation_llm", "get_vision_llm",
+    "get_translation_llm",
     "LLMClient", "LLMError",
     "SystemBlock", "ContentBlock", "TextContent", "ImageContent",
 ]

@@ -47,7 +47,6 @@ def _make_job(**overrides) -> Job:
         item_name="movie.mkv",
         target_lang="fr",
         provider="nllb",
-        mode="audio",
     )
     base.update(overrides)
     return Job(**base)
@@ -237,7 +236,7 @@ def test_submit_persists_queued_job_to_disk():
         jobs.set_main_loop(loop)
         job = jobs.submit(
             item_id="x", item_name="m.mkv", target_lang="fr",
-            provider="nllb", mode="audio", runner=fake_run,
+            provider="nllb", runner=fake_run,
         )
         path = jobs_store._store_path()
         assert path.exists()

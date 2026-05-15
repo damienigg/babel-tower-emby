@@ -4,13 +4,15 @@ Pins down behaviors that don't have an obvious test-home elsewhere:
 - Literal-typed FastAPI params reject garbage values with 422.
 - LLM provider rejects duplicate cue ids in the response (so a model
   that returns N items with overlapping ids doesn't silently drop work).
-- Frame extractor builds the right ffmpeg args for fast vs accurate seek
-  (no actual ffmpeg invocation — we stub subprocess).
 - DeepL and NLLB providers honor the configurable batch sizes.
 - Plex pagination forwards start_index to X-Plex-Container-Start.
 - Plex _video_sections cache survives across PlexClient instances.
 - Refresh-item failure is logged at WARNING (so operators can debug
   "why didn't Emby pick up my new subtitle").
+
+Pre-0.7.32 this file also covered frame-extraction ffmpeg arg shape
+and mode-Literal schema rejection. The frames module and the mode
+parameter were both removed; the corresponding tests went with them.
 """
 from unittest.mock import MagicMock, patch
 
@@ -20,7 +22,6 @@ from fastapi.testclient import TestClient
 
 from app.config import settings as runtime_settings
 from app.main import app
-from app.pipeline import frames as frames_mod
 from app.pipeline.llm.base import LLMError, SystemBlock, TextContent
 from app.pipeline.stt import Cue
 from app.pipeline.translate import llm as llm_mod
@@ -34,14 +35,6 @@ def client():
 
 
 # ── 14: Literal-typed query params ─────────────────────────────────────────
-
-
-def test_process_item_rejects_unknown_mode_at_schema(client):
-    """FastAPI must 422 on a mode string that's not in the Literal set —
-    we don't even get into the route body. Stops accidental typos like
-    `mode=audi` from silently falling back to the default-from-settings."""
-    r = client.post("/api/process/some-id?mode=audi")
-    assert r.status_code == 422
 
 
 def test_process_item_rejects_unknown_provider_at_schema(client):
@@ -85,57 +78,6 @@ def test_llm_provider_rejects_duplicate_ids_in_response(monkeypatch):
     provider = llm_mod.LLMTranslationProvider()
     with pytest.raises(TranslationError, match="Duplicate cue id"):
         provider.translate(cues, "en", "fr")
-
-
-# ── 18: Frame extraction ffmpeg args ───────────────────────────────────────
-
-
-def _capture_ffmpeg_args(timestamp: float, accurate: bool) -> list[str]:
-    """Invoke extract_frame_bytes with subprocess.run stubbed, return the
-    full ffmpeg argv that would have been called."""
-    captured = {}
-
-    def fake_run(args, **kwargs):
-        captured["args"] = list(args)
-        result = MagicMock()
-        result.stdout = b"\xff\xd8\xff\xd9"   # minimal valid JPEG bytes
-        return result
-
-    with patch.object(frames_mod.subprocess, "run", side_effect=fake_run):
-        frames_mod.extract_frame_bytes(
-            "/some/movie.mkv", timestamp, max_size=512, accurate=accurate,
-        )
-    return captured["args"]
-
-
-def test_extract_frame_fast_seek_puts_ss_before_i():
-    args = _capture_ffmpeg_args(timestamp=120.0, accurate=False)
-    # `-ss <ts>` appears immediately before `-i <media_path>`.
-    ss_idx = args.index("-ss")
-    i_idx = args.index("-i")
-    assert ss_idx < i_idx
-    # And there's only ONE `-ss` in the fast path.
-    assert args.count("-ss") == 1
-
-
-def test_extract_frame_accurate_seek_uses_combined_seek():
-    args = _capture_ffmpeg_args(timestamp=120.0, accurate=True)
-    # Accurate path emits TWO `-ss` invocations: pre-roll before -i,
-    # remainder after -i.
-    assert args.count("-ss") == 2
-    ss_positions = [i for i, a in enumerate(args) if a == "-ss"]
-    i_idx = args.index("-i")
-    # First -ss is before -i (fast input seek to ~5s pre-roll), second is
-    # after (accurate output seek of the remaining 5s).
-    assert ss_positions[0] < i_idx < ss_positions[1]
-
-
-def test_extract_frame_accurate_at_zero_timestamp_falls_back_to_fast():
-    """When timestamp < pre_roll (5s), accurate seek would degenerate
-    to `-i + -ss 0` which is the same as the fast path. We collapse it
-    cleanly rather than emitting a no-op `-ss 0`."""
-    args = _capture_ffmpeg_args(timestamp=2.0, accurate=True)
-    assert args.count("-ss") == 1
 
 
 # ── 26: Configurable batch sizes for NLLB + DeepL ──────────────────────────
